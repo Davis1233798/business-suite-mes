@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert";
 import { getDb } from "../../db/index.ts";
-import { organizations, users, memberships, auditEvents, idempotencyKeys, erpItems } from "../../db/schema.ts";
+import { organizations, users, memberships, auditEvents, idempotencyKeys, mesProducts } from "../../db/schema.ts";
 import { seedOrganization } from "../../lib/seed.ts";
 import { resolveTenantContext, checkPermission } from "../../lib/tenant.ts";
 import { recordAuditEvent } from "../../lib/audit.ts";
@@ -43,41 +43,12 @@ test("P0 Core: C01 - Identity and Role Permissions", async () => {
 });
 
 test("P0 Core: C02 - Multi-tenant Isolation", async () => {
-  const db = getDb();
-  const orgA = "org_iso_a";
-  const orgB = "org_iso_b";
-
-  await seedOrganization(orgA);
-  await seedOrganization(orgB);
-
-  // Add a unique item to Org A
-  const itemAId = `item_unique_a_${Date.now()}`;
-  await db.insert(erpItems).values({
-    id: itemAId,
-    organizationId: orgA,
-    sku: "SKU-ISOLATED-A",
-    name: "隔離測試商品 A",
-    unit: "PCS",
-    boxConversionRatio: 1,
-    category: "TEST",
-    isActive: true,
-  });
-
-  // Query as Org B using Org A's ID
-  const queryFromB = await db
-    .select()
-    .from(erpItems)
-    .where(and(eq(erpItems.organizationId, orgB), eq(erpItems.id, itemAId)));
-
-  assert.strictEqual(queryFromB.length, 0, "Org B should never see Org A data!");
-
-  // Query as Org A
-  const queryFromA = await db
-    .select()
-    .from(erpItems)
-    .where(and(eq(erpItems.organizationId, orgA), eq(erpItems.id, itemAId)));
-
-  assert.strictEqual(queryFromA.length, 1, "Org A should see its own data.");
+  const db = getDb(); const orgA = `iso_a_${crypto.randomUUID()}`; const orgB = `iso_b_${crypto.randomUUID()}`;
+  await seedOrganization(orgA); await seedOrganization(orgB);
+  const id = crypto.randomUUID();
+  await db.insert(mesProducts).values({id, organizationId: orgA, sku: "PRIVATE", name: "Private"});
+  assert.strictEqual((await db.select().from(mesProducts).where(and(eq(mesProducts.organizationId, orgB), eq(mesProducts.id,id)))).length, 0);
+  assert.strictEqual((await db.select().from(mesProducts).where(and(eq(mesProducts.organizationId, orgA), eq(mesProducts.id,id)))).length, 1);
 });
 
 test("P0 Core: C03 - Audit Logging", async () => {

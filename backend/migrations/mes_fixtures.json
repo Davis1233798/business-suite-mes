@@ -1,0 +1,139 @@
+{
+  "mes_bom_items": [
+    {
+      "id": "mes_item_01_org_go_fixture",
+      "organization_id": "org_go_fixture",
+      "bom_version_id": "mes_bom_v1_org_go_fixture",
+      "material_sku": "RAW-ALUM-6061",
+      "material_name": "航太級6061原鋁塊",
+      "quantity_per_unit": 2,
+      "unit": "PCS",
+      "created_at": "2026-10-30 16:30:21"
+    },
+    {
+      "id": "mes_item_02_org_go_fixture",
+      "organization_id": "org_go_fixture",
+      "bom_version_id": "mes_bom_v1_org_go_fixture",
+      "material_sku": "RAW-THERMAL-PASTE",
+      "material_name": "高效能導熱膏",
+      "quantity_per_unit": 1,
+      "unit": "TUBE",
+      "created_at": "2026-10-30 16:30:21"
+    }
+  ],
+  "mes_bom_versions": [
+    {
+      "id": "mes_bom_v1_org_go_fixture",
+      "organization_id": "org_go_fixture",
+      "product_id": "mes_prd_01_org_go_fixture",
+      "version": 1,
+      "status": "active",
+      "is_active": 1,
+      "notes": "標準生產BOM v1 (每件耗原鋁2件、散熱膏1管)",
+      "created_at": "2026-10-30 16:30:21"
+    }
+  ],
+  "mes_material_lots": [
+    {
+      "id": "mes_lot_01_org_go_fixture",
+      "organization_id": "org_go_fixture",
+      "lot_number": "LOT-202610-AL01",
+      "material_sku": "RAW-ALUM-6061",
+      "initial_quantity": 500,
+      "current_quantity": 300,
+      "status": "available",
+      "created_at": "2026-10-30 16:30:21"
+    }
+  ],
+  "mes_operations": [
+    {
+      "id": "mes_op_01_org_go_fixture",
+      "organization_id": "org_go_fixture",
+      "work_order_id": "mes_wo_01_org_go_fixture",
+      "sequence": 10,
+      "work_center_id": "mes_wc_01_org_go_fixture",
+      "name": "精密CNC切削成型",
+      "standard_minutes_per_unit": 1,
+      "status": "pending",
+      "created_at": "2026-10-30 16:30:21"
+    },
+    {
+      "id": "mes_op_02_org_go_fixture",
+      "organization_id": "org_go_fixture",
+      "work_order_id": "mes_wo_01_org_go_fixture",
+      "sequence": 20,
+      "work_center_id": "mes_wc_02_org_go_fixture",
+      "name": "陽極硬化處理",
+      "standard_minutes_per_unit": 1,
+      "status": "pending",
+      "created_at": "2026-10-30 16:30:21"
+    }
+  ],
+  "mes_products": [
+    {
+      "id": "mes_prd_01_org_go_fixture",
+      "organization_id": "org_go_fixture",
+      "sku": "PRD-AL-HEAT",
+      "name": "鋁合金散熱模組 (Alloy Heat Module A)",
+      "unit": "PCS",
+      "status": "active",
+      "created_at": "2026-10-30 16:30:21"
+    }
+  ],
+  "mes_work_centers": [
+    {
+      "id": "mes_wc_01_org_go_fixture",
+      "organization_id": "org_go_fixture",
+      "code": "WC-CNC-01",
+      "name": "精密五軸CNC切削中心",
+      "capacity_minutes_per_day": 480,
+      "status": "active",
+      "created_at": "2026-10-30 16:30:21"
+    },
+    {
+      "id": "mes_wc_02_org_go_fixture",
+      "organization_id": "org_go_fixture",
+      "code": "WC-ANODIZE-01",
+      "name": "陽極氧化表面處理線",
+      "capacity_minutes_per_day": 480,
+      "status": "active",
+      "created_at": "2026-10-30 16:30:21"
+    }
+  ],
+  "mes_work_order_materials": [
+    {
+      "id": "mes_wom_01_org_go_fixture",
+      "organization_id": "org_go_fixture",
+      "work_order_id": "mes_wo_01_org_go_fixture",
+      "material_lot_id": "mes_lot_01_org_go_fixture",
+      "material_sku": "RAW-ALUM-6061",
+      "issued_quantity": 200,
+      "returned_quantity": 10,
+      "net_quantity": 190,
+      "created_at": "2026-10-30 16:30:21"
+    }
+  ],
+  "mes_work_orders": [
+    {
+      "id": "mes_wo_01_org_go_fixture",
+      "organization_id": "org_go_fixture",
+      "order_no": "WO-202610-001",
+      "product_id": "mes_prd_01_org_go_fixture",
+      "bom_version_id": "mes_bom_v1_org_go_fixture",
+      "target_quantity": 100,
+      "completed_quantity": 0,
+      "scrapped_quantity": 0,
+      "status": "released",
+      "materials_staged": 1,
+      "scheduled_minutes": 480,
+      "created_at": "2026-10-30 16:30:21"
+    }
+  ],
+  "mes_projection_revisions": [
+    {
+      "organization_id": "org_go_fixture",
+      "work_order_id": "mes_wo_01_org_go_fixture",
+      "revision": 4
+    }
+  ]
+}
