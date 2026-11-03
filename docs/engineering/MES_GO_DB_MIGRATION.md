@@ -1,99 +1,76 @@
 # Shared Go SQLite to MES-only database migration
 
-Status: offline importer and synthetic acceptance suite are implemented. The
-tool is not production-certified; do not run it against a live/shared database
-or switch `SUITE_DB` based only on this document. CI is the required first
-execution evidence.
+Status: offline importer and synthetic acceptance suite are implemented. They
+are not production-certified. Do not run against a live/shared database or
+switch `SUITE_DB` based only on this document; wait for CI and review.
 
 ## Source and target boundary
 
-The source is the shared Go SQLite database from the Portfolio repository. It
-is recognized through `suite_migrations` containing exactly the supported
-`0003_mes_projection` marker; the shared Go DB does not use the standalone MES
-repository's `mes_repository_schema` marker. It must be opened read-only and
-snapshotted with SQLite `VACUUM INTO` while all writers are stopped. The
-original file is never modified. The output must be a new, exclusively-created
-path. Never overwrite, rename over, or initialize a nonempty destination. The
-destination gets this MES repository's migrations and `mes_repository_schema`
-marker, not a marker copied from the source.
+The source is the shared Go SQLite database from Portfolio. It is identified by
+`suite_migrations` containing `0003_mes_projection`; only
+`0003_mes_projection`, `0006_mes_finished_goods`, and
+`0007_mes_finished_goods_resolutions` are supported. The shared database does
+not use the standalone MES repo's `mes_repository_schema` marker. The source is
+opened read-only and snapshotted with SQLite `VACUUM INTO`; stop all writers
+first. The original file is never modified. The output must be a new path whose
+parent exists. The target schema comes from this MES repository's migrations
+and receives its own `mes_repository_schema` marker.
 
-## Explicit table contract
+## Table contract
 
 | Action | Tables | Policy |
 | --- | --- | --- |
-| Copy | `organizations`, `mes_products`, `mes_bom_versions`, `mes_bom_items`, `mes_work_centers`, `mes_work_orders`, `mes_operations`, `mes_material_lots`, `mes_work_order_materials`, `mes_production_reports`, `mes_quality_checks`, `mes_downtime_events` | Preserve tenant IDs and primary keys for explicitly selected organizations. |
-| Copy with filtering | `users`, `memberships`, `station_accounts`, `station_grants`, `audit_events` | Keep only identities referenced by retained MES memberships, MES actions, MES reporters/inspectors/operators, or accounts for selected organizations. Keep only `site='mes'` grants and `action LIKE 'mes.%'` audit history. Password hashes are retained for selected MES accounts; cross-tenant account/membership reuse fails closed. |
-| Recreate empty | `station_sessions`, `station_login_limits`, `idempotency_keys`, `demo_seed_states`, `traffic_runs`, `traffic_records` | Sessions, rate limits, idempotency and demo/traffic state are reset. No sessions are copied. |
-| Rebuild | `outbox_events`, `suite_migrations`, `mes_projection_revisions` | Any source outbox row blocks migration. MES projection schema/backfill is created from imported work orders; source delivery state is not copied. |
-| Exclude | Every other table, including all `erp_*`, `pos_*`, `crm_*`, `dining_*`, and `shop_*` tables | Never copy. Resolve all source outbox rows first; silently dropping another station's events could lose work. |
+| Copy | `organizations`, `mes_products`, `mes_bom_versions`, `mes_bom_items`, `mes_work_centers`, `mes_work_orders`, `mes_operations`, `mes_material_lots`, `mes_work_order_materials`, `mes_production_reports`, `mes_quality_checks`, `mes_downtime_events`, `mes_finished_goods_batches`, `mes_finished_goods_quality_dispositions`, `mes_finished_goods_inventory`, `mes_finished_goods_receipts`, `mes_finished_goods_resolutions` | Preserve IDs and rows for explicitly selected organizations; validate same-tenant work-order, report, batch, product, and user references. |
+| Filter and copy | `users`, `memberships`, `station_accounts`, `station_grants`, `audit_events` | Copy only identities needed by selected MES tenants, only `site='mes'` grants, and only `action LIKE 'mes.%'` audit rows. Preserve selected account password hashes. Reject identities also linked to unselected tenants. |
+| Reset | `station_sessions`, `station_login_limits`, `idempotency_keys`, `demo_seed_states`, `traffic_runs`, `traffic_records` | Do not copy ephemeral sessions, lockouts, replay keys, demo, or traffic records. |
+| Rebuild | `outbox_events`, `suite_migrations`, `mes_projection_revisions` | Any source outbox row blocks migration. Install projection triggers after import and rebuild projection events from work orders; do not copy delivery state. |
+| Exclude | All other tables, including `erp_*`, `pos_*`, `crm_*`, `dining_*`, `shop_*`, plus `mes_erp_product_mappings` and `erp_mes_receipt_postings` | MES/ERP integration tables may be present only when empty. Any mapping or receipt-posting rows cause refusal because their ERP references cannot be preserved in an MES-only database. Unknown MES tables or migration markers also cause refusal. |
 
-The importer pins a reviewed list against the repository migrations. It refuses
-shared DB ledgers with migrations beyond the supported projection-only version
-and refuses unknown `mes_*` tables. The latest profolio main has added MES
-finished-goods and MES/ERP integration tables/migrations; it therefore fails
-closed until the target repo adopts and validates those schemas. Existing Go
-migrations define few foreign keys for MES business tables, so application-level
-tenant/reference checks supplement `PRAGMA foreign_key_check`.
+Finished-goods schema from profolio migrations `0006` and `0007` is included in
+the independent MES Go target. The latest profolio `0008`/`0009` MES/ERP model is
+cross-station state and is not copied. Application-level checks supplement
+`PRAGMA foreign_key_check`, since older MES core tables have few declared FKs.
 
-## Required importer properties
+## Importer safety properties
 
-1. Validate source marker/version and integrity, list all tables/counts, and
-   reject unknown schema versions or missing expected tables.
-2. Create a consistent private backup without write access to source. Emit the
-   content snapshot hash and per-table copied/target counts without row contents
-   or credentials.
-3. Build target schema in a staging file beside the target, then transactionally
-   copy the exact allowlisted tables with tenant/account filtering.
-4. Before commit, verify tenant membership, cross-table references, row counts,
-   per-row equality (including NULL/blob handling), and FK checks. Assert no
-   excluded station data was copied and no unauthorized grants remain.
-5. Verify destination integrity, add the MES marker last, close/fsync the staged
-   database, and
-   atomically publish only if the final destination path still does not exist.
-   Any failure removes staging files and leaves source and preexisting targets
-   byte-for-byte unchanged.
-6. Require stopped writers for cutover. Keep source as rollback copy; on
-   rollback, stop MES writers and restore the old `SUITE_DB` setting. There is
-   no safe reverse merge after MES accepts writes unless a separately designed
-   delta protocol exists.
+The importer requires explicit `--organization` IDs; wildcard import is
+disabled. It validates source schema and integrity, verifies a consistent
+private snapshot inside a mode-0700 temporary directory, creates an unseeded
+target schema in a new staging file,
+copies the allowlisted rows inside a transaction, and compares rows and counts.
+It checks tenant-scoped references, session reset, FK and integrity checks,
+then adds the MES marker and fsyncs the staged database. A hard link publishes
+the complete file only if the destination still does not exist. Failures leave
+the source and any preexisting destination unchanged and clean up staging files.
 
-## Offline command and acceptance suite
-
-Use a stopped, backed-up source and a new destination path on the same
-filesystem. Select tenants explicitly; wildcard import is disabled:
+Command for a stopped, backed-up source and new destination path:
 
 ```powershell
 node scripts/migrate-mes-go-db.mjs --source C:\path\shared.sqlite --destination C:\path\mes-new.sqlite --organization ORG_ID
 node --test tests/migration/mes-go-db.test.mjs
 ```
 
-The command performs a read-only source open, creates and verifies a consistent
-private snapshot, writes only an exclusive staging file, then atomically
-hard-links the complete target into a previously absent destination. It emits
-counts and a content snapshot hash, not row contents. Any source outbox events,
-unresolved references, unknown MES tables, unsupported markers, and identities
-also belonging to unselected tenants cause refusal. Target schema is bootstrapped
-from this repo's Go migrations without demo seeds.
+The command emits table counts and a source content hash, never row contents.
+It rejects any source outbox rows, unresolved business or identity references,
+unknown MES migrations/tables, populated MES/ERP mappings, and identity reuse
+across selected/unselected tenants.
 
-Tests use only generated disposable databases bootstrapped from the same
-shared multi-station Go base migrations (`0000` through `0005`) as Portfolio,
-with the projection ledger rather than an independent-MES marker. Current
-synthetic cases cover
-tenant filtering, account hashes, MES-only grants/audit, session reset, rebuilt
-projection events, non-MES exclusion, existing destination protection,
-unresolved references, outbox refusal, cross-tenant identity refusal, and
-unsupported markers. Additional CI coverage should include missing tables,
-schema mismatch, and Go startup/business write-read against the imported target.
-Tests assert source bytes and existing destination remain unchanged on covered
-failure paths. Tests must never use
-`.data`, `.wrangler`, a configured hosting database, or a production URL.
+## CI fixture and limits
 
-## Known gap
+CI creates only disposable SQLite files from shared multi-station Go
+migrations `0000` through `0009`, including synthetic finished-goods records
+and empty MES/ERP integration tables. Cases cover selected-tenant copying,
+account hashes, MES-only grants and audit, session reset, rebuilt projection,
+non-MES exclusion, no-clobber destinations, unresolved references, outbox
+refusal, cross-tenant identity refusal, cross-station mapping refusal, and
+unsupported markers. No local tests are run during this change.
 
-The existing Portfolio `scripts/migrate-legacy-sqlite.py` is a Node/Vinext
-site-schema importer. It does not import Go data or move D1 data. MES Go and
-Vinext have separate SQLite files. The importer intentionally targets the Go
-database only and its base schema has no demo seed inserts. D1 requires a
-separate export/import plan and is outside this migration. CI has not yet
-executed for this change; passing CI still does not certify production data,
-full application workflows, downtime, or rollback after new MES writes.
+Passing CI will establish only the synthetic path. It will not certify actual
+source data, a complete application workflow, production downtime, deployment,
+or rollback after MES has accepted new writes. The MES Go server currently has
+the imported finished-goods schema but its independent repository has not yet
+ported the profolio finished-goods HTTP handlers/UI; data is preserved but that
+workflow is not yet usable through the target app. MES Go and Vinext SQLite
+remain separate files; D1 export/import and cross-system ERP integration
+migration are outside this procedure. Before production, review exact source inventory,
+selected organizations, outbox reconciliation, backups, and rollback ownership.

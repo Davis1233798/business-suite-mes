@@ -9,20 +9,21 @@ export const MES_TABLES = [
   'mes_products', 'mes_bom_versions', 'mes_bom_items', 'mes_work_centers',
   'mes_work_orders', 'mes_operations', 'mes_material_lots',
   'mes_work_order_materials', 'mes_production_reports', 'mes_quality_checks',
-  'mes_downtime_events',
+  'mes_downtime_events', 'mes_finished_goods_batches',
+  'mes_finished_goods_quality_dispositions', 'mes_finished_goods_inventory',
+  'mes_finished_goods_receipts', 'mes_finished_goods_resolutions',
 ];
 export const COPY_TABLES = ['organizations', 'users', 'memberships', ...MES_TABLES, 'audit_events', 'station_accounts', 'station_grants'];
 export const RESET_TABLES = ['station_sessions', 'station_login_limits', 'idempotency_keys', 'demo_seed_states', 'traffic_runs', 'traffic_records'];
 export const REBUILT_TABLES = ['outbox_events', 'suite_migrations', 'mes_projection_revisions'];
 export const EXCLUDED_PREFIXES = ['erp_', 'pos_', 'crm_', 'dining_', 'shop_'];
+export const CROSS_STATION_TABLES = ['mes_erp_product_mappings', 'erp_mes_receipt_postings'];
 
 const q = value => `"${String(value).replaceAll('"', '""')}"`;
 const sqlLiteral = value => `'${String(value).replaceAll("'", "''")}'`;
-const tableExists = (db, table) => Boolean(db.prepare("SELECT 1 FROM sqlite_master WHERE type='table' AND name=?").get(table));
 const tables = db => new Set(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all().map(row => row.name));
 const columns = (db, table) => db.prepare(`PRAGMA table_info(${q(table)})`).all().map(row => row.name);
 const count = (db, table) => db.prepare(`SELECT COUNT(*) AS n FROM ${q(table)}`).get().n;
-const safeUnlink = file => { try { fs.unlinkSync(file); } catch (error) { if (error.code !== 'ENOENT') throw error; } };
 
 function assertIntegrity(db, label) {
   const checks = db.prepare('PRAGMA integrity_check').all();
@@ -61,10 +62,6 @@ function copyRows(source, target, table, where, params) {
   return sourceRows.length;
 }
 
-function readJson(file) {
-  return JSON.parse(fs.readFileSync(file, 'utf8'));
-}
-
 function manifestSnapshot(db) {
   const digest = createHash('sha256');
   for (const table of [...tables(db)].sort()) {
@@ -83,15 +80,20 @@ function assertSource(source) {
   // The shared Portfolio Go database is identified by its projection migration
   // ledger, not by the independent MES repository marker.
   if (!names.has('organizations') || !names.has('suite_migrations')) throw new Error('Unsupported shared Go source database: missing organizations or suite_migrations');
+  if (names.has('mes_repository_schema')) throw new Error('Source is already marked as an independent MES database, not the shared Portfolio Go database');
   const applied = source.prepare('SELECT name FROM suite_migrations ORDER BY name').all().map(row => row.name);
   if (!applied.includes('0003_mes_projection')) throw new Error('Unsupported shared Go source version: 0003_mes_projection is absent');
-  const unknownVersions = applied.filter(name => name !== '0003_mes_projection');
+  const allowedVersions = new Set(['0003_mes_projection', '0006_mes_finished_goods', '0007_mes_finished_goods_resolutions']);
+  const unknownVersions = applied.filter(name => !allowedVersions.has(name));
   if (unknownVersions.length) throw new Error(`Unsupported shared Go migrations: ${unknownVersions.join(', ')}`);
   for (const table of COPY_TABLES) if (!names.has(table)) throw new Error(`Required source table missing: ${table}`);
   for (const table of RESET_TABLES) if (!names.has(table)) throw new Error(`Required source table missing: ${table}`);
   for (const table of REBUILT_TABLES) if (!names.has(table)) throw new Error(`Required source table missing: ${table}`);
-  const unknownMes = [...names].filter(name => name.startsWith('mes_') && !MES_TABLES.includes(name) && !['mes_repository_schema', 'mes_projection_revisions'].includes(name));
+  const unknownMes = [...names].filter(name => name.startsWith('mes_') && !MES_TABLES.includes(name) && !['mes_repository_schema', 'mes_projection_revisions', ...CROSS_STATION_TABLES].includes(name));
   if (unknownMes.length) throw new Error(`Unknown MES tables require review: ${unknownMes.sort().join(', ')}`);
+  for (const table of CROSS_STATION_TABLES) {
+    if (names.has(table) && count(source, table) !== 0) throw new Error(`Cross-station MES/ERP table ${table} contains rows; resolve the integration before migration`);
+  }
   const pending = source.prepare('SELECT COUNT(*) AS n FROM outbox_events').get().n;
   if (pending) throw new Error(`Source outbox contains ${pending} rows; resolve or explicitly reconcile before migration`);
   return names;
@@ -133,12 +135,17 @@ function assertMesReferences(db) {
     ['MES BOM product', `SELECT v.id FROM mes_bom_versions v LEFT JOIN mes_products p ON p.organization_id=v.organization_id AND p.id=v.product_id WHERE p.id IS NULL`],
     ['MES BOM item version', `SELECT i.id FROM mes_bom_items i LEFT JOIN mes_bom_versions v ON v.organization_id=i.organization_id AND v.id=i.bom_version_id WHERE v.id IS NULL`],
     ['MES work order product', `SELECT w.id FROM mes_work_orders w LEFT JOIN mes_products p ON p.organization_id=w.organization_id AND p.id=w.product_id WHERE p.id IS NULL`],
-    ['MES work order BOM', `SELECT w.id FROM mes_work_orders w LEFT JOIN mes_bom_versions b ON b.organization_id=w.organization_id AND b.id=w.bom_version_id WHERE b.id IS NULL`],
+    ['MES work order BOM', `SELECT w.id FROM mes_work_orders w LEFT JOIN mes_bom_versions b ON b.organization_id=w.organization_id AND b.id=w.bom_version_id AND b.product_id=w.product_id WHERE b.id IS NULL`],
     ['MES operation work order/work center', `SELECT o.id FROM mes_operations o LEFT JOIN mes_work_orders w ON w.organization_id=o.organization_id AND w.id=o.work_order_id LEFT JOIN mes_work_centers c ON c.organization_id=o.organization_id AND c.id=o.work_center_id WHERE w.id IS NULL OR c.id IS NULL`],
     ['MES material issue work order/lot', `SELECT m.id FROM mes_work_order_materials m LEFT JOIN mes_work_orders w ON w.organization_id=m.organization_id AND w.id=m.work_order_id LEFT JOIN mes_material_lots l ON l.organization_id=m.organization_id AND l.id=m.material_lot_id WHERE w.id IS NULL OR l.id IS NULL`],
-    ['MES production report references', `SELECT r.id FROM mes_production_reports r LEFT JOIN mes_work_orders w ON w.organization_id=r.organization_id AND w.id=r.work_order_id LEFT JOIN mes_operations o ON o.organization_id=r.organization_id AND o.id=r.operation_id LEFT JOIN users u ON u.id=r.operator_id WHERE w.id IS NULL OR o.id IS NULL OR u.id IS NULL`],
-    ['MES quality references', `SELECT q.id FROM mes_quality_checks q LEFT JOIN mes_work_orders w ON w.organization_id=q.organization_id AND w.id=q.work_order_id LEFT JOIN mes_production_reports r ON r.organization_id=q.organization_id AND r.id=q.report_id LEFT JOIN users u ON u.id=q.inspector_id WHERE w.id IS NULL OR (q.report_id IS NOT NULL AND r.id IS NULL) OR u.id IS NULL`],
+    ['MES production report references', `SELECT r.id FROM mes_production_reports r LEFT JOIN mes_work_orders w ON w.organization_id=r.organization_id AND w.id=r.work_order_id LEFT JOIN mes_operations o ON o.organization_id=r.organization_id AND o.id=r.operation_id AND o.work_order_id=r.work_order_id LEFT JOIN users u ON u.id=r.operator_id WHERE w.id IS NULL OR o.id IS NULL OR u.id IS NULL`],
+    ['MES quality references', `SELECT q.id FROM mes_quality_checks q LEFT JOIN mes_work_orders w ON w.organization_id=q.organization_id AND w.id=q.work_order_id LEFT JOIN mes_production_reports r ON r.organization_id=q.organization_id AND r.id=q.report_id AND r.work_order_id=q.work_order_id LEFT JOIN users u ON u.id=q.inspector_id WHERE w.id IS NULL OR (q.report_id IS NOT NULL AND r.id IS NULL) OR u.id IS NULL`],
     ['MES downtime references', `SELECT d.id FROM mes_downtime_events d LEFT JOIN mes_work_centers c ON c.organization_id=d.organization_id AND c.id=d.work_center_id LEFT JOIN users u ON u.id=d.reporter_id WHERE c.id IS NULL OR u.id IS NULL`],
+    ['MES finished goods batch references', `SELECT b.id FROM mes_finished_goods_batches b LEFT JOIN mes_work_orders w ON w.organization_id=b.organization_id AND w.id=b.work_order_id LEFT JOIN mes_production_reports r ON r.organization_id=b.organization_id AND r.id=b.report_id AND r.work_order_id=b.work_order_id WHERE w.id IS NULL OR r.id IS NULL`],
+    ['MES finished goods quality references', `SELECT q.id FROM mes_finished_goods_quality_dispositions q LEFT JOIN mes_finished_goods_batches b ON b.organization_id=q.organization_id AND b.id=q.batch_id LEFT JOIN mes_quality_checks c ON c.organization_id=q.organization_id AND c.id=q.quality_check_id AND c.work_order_id=b.work_order_id WHERE b.id IS NULL OR (q.quality_check_id IS NOT NULL AND c.id IS NULL)`],
+    ['MES finished goods inventory references', `SELECT i.id FROM mes_finished_goods_inventory i LEFT JOIN mes_finished_goods_batches b ON b.organization_id=i.organization_id AND b.id=i.batch_id WHERE b.id IS NULL`],
+    ['MES finished goods receipt references', `SELECT r.id FROM mes_finished_goods_receipts r LEFT JOIN mes_finished_goods_batches b ON b.organization_id=r.organization_id AND b.id=r.batch_id WHERE b.id IS NULL`],
+    ['MES finished goods resolution references', `SELECT r.id FROM mes_finished_goods_resolutions r LEFT JOIN mes_finished_goods_batches b ON b.organization_id=r.organization_id AND b.id=r.batch_id WHERE b.id IS NULL OR b.quantity<>r.quantity`],
     ['MES membership references', `SELECT m.id FROM memberships m LEFT JOIN organizations o ON o.id=m.organization_id LEFT JOIN users u ON u.id=m.user_id WHERE o.id IS NULL OR u.id IS NULL`],
     ['MES audit actor references', `SELECT a.id FROM audit_events a LEFT JOIN users u ON u.id=a.actor_id WHERE u.id IS NULL`],
   ];
@@ -151,7 +158,8 @@ function assertMesReferences(db) {
 function applyTargetSchema(target) {
   const root = path.resolve(path.dirname(fileURLToPath(import.meta.url)), '..');
   const migrationDir = path.join(root, 'backend', 'migrations');
-  for (const file of ['mes_initial.sql', 'mes_guards.sql', '0004_station_identity.sql', '0005_traffic_lab.sql']) {
+  target.exec('CREATE TABLE suite_migrations(name TEXT PRIMARY KEY)');
+  for (const file of ['mes_initial.sql', 'mes_guards.sql', '0004_station_identity.sql', '0005_traffic_lab.sql', '0006_mes_finished_goods.sql', '0007_mes_finished_goods_resolutions.sql']) {
     target.exec(fs.readFileSync(path.join(migrationDir, file), 'utf8'));
   }
   // Projection triggers and the initial work-order outbox backfill are installed
@@ -168,8 +176,10 @@ export function migrate(sourcePath, destinationPath, organizationIds) {
   if (!fs.statSync(sourceFile).isFile() || !fs.statSync(path.dirname(destinationFile)).isDirectory()) throw new Error('Source file and destination parent directory are required');
   let source, backup, target;
   const nonce = randomBytes(16).toString('hex');
-  const backupPath = path.join(path.dirname(destinationFile), `.mes-source-${nonce}.sqlite`);
-  const stagingPath = path.join(path.dirname(destinationFile), `.mes-target-${nonce}.sqlite`);
+  const privateDir = fs.mkdtempSync(path.join(path.dirname(destinationFile), `.mes-migration-${nonce}-`));
+  try { fs.chmodSync(privateDir, 0o700); } catch {}
+  const backupPath = path.join(privateDir, 'source-snapshot.sqlite');
+  const stagingPath = path.join(privateDir, 'mes-target.sqlite');
   try {
     source = new DatabaseSync(sourceFile, { readOnly: true });
     assertSource(source);
@@ -187,7 +197,7 @@ export function migrate(sourcePath, destinationPath, organizationIds) {
     for (const table of MES_TABLES) {
       for (const row of source.prepare(`SELECT DISTINCT organization_id FROM ${q(table)} WHERE organization_id IN (${marks})`).all(...selectedOrgIds)) businessOrgIds.add(row.organization_id);
     }
-  for (const row of source.prepare(`SELECT DISTINCT a.organization_id FROM station_grants g JOIN station_accounts a ON a.user_id=g.user_id WHERE g.site='mes' AND a.organization_id IN (${marks})`).all(...selectedOrgIds)) businessOrgIds.add(row.organization_id);
+    for (const row of source.prepare(`SELECT DISTINCT a.organization_id FROM station_grants g JOIN station_accounts a ON a.user_id=g.user_id WHERE g.site='mes' AND a.organization_id IN (${marks})`).all(...selectedOrgIds)) businessOrgIds.add(row.organization_id);
     const noMes = selectedOrgIds.filter(id => !businessOrgIds.has(id));
     if (noMes.length) throw new Error(`Selected tenant has no MES business data or MES identity grant: ${noMes.join(', ')}`);
 
@@ -236,11 +246,10 @@ export function migrate(sourcePath, destinationPath, organizationIds) {
     try { fs.fsyncSync(syncFd); } finally { fs.closeSync(syncFd); }
     // Atomic no-clobber publication. linkSync fails if destination already exists.
     fs.linkSync(stagingPath, destinationFile);
-    safeUnlink(stagingPath);
     return { source: sourceFile, destination: destinationFile, organizationIds: selectedOrgIds, sourceSnapshotContentSha256: before, copiedRows: copied, targetRows: targetCounts, resetTables: RESET_TABLES, rebuiltTables: REBUILT_TABLES, sessionsCopied: false };
   } finally {
     target?.close(); backup?.close(); source?.close();
-    safeUnlink(backupPath); safeUnlink(stagingPath);
+    fs.rmSync(privateDir, { recursive: true, force: true });
   }
 }
 

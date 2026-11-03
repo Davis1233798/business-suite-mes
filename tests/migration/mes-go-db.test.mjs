@@ -16,16 +16,19 @@ function temporary(t) {
   return dir;
 }
 
-function makeSharedSource(file, { badReporter = false, pendingOutbox = false, extraMesTable = false, extraVersion = false } = {}) {
+function makeSharedSource(file, { badReporter = false, pendingOutbox = false, processedOutbox = false, extraMesTable = false, extraVersion = false, populatedErpMapping = false } = {}) {
   const db = new DatabaseSync(file);
   // Match the shared Portfolio Go database bootstrap, including its actual
   // common multi-station schema and migration ledger rather than the standalone
   // MES repository's reduced `mes_initial.sql` source.
-  for (const name of ['0000_spicy_bromley.sql', '0001_transaction_guards.sql', '0002_dining_takeout.sql', '0003_mes_projection.sql', '0004_station_identity.sql', '0005_traffic_lab.sql']) {
+  for (const name of ['0000_spicy_bromley.sql', '0001_transaction_guards.sql', '0002_dining_takeout.sql', '0003_mes_projection.sql', '0004_station_identity.sql', '0005_traffic_lab.sql', '0006_mes_finished_goods.sql', '0007_mes_finished_goods_resolutions.sql']) {
     db.exec(fs.readFileSync(path.join(migrations, name), 'utf8'));
   }
-  if (extraVersion) db.exec("INSERT INTO suite_migrations(name) VALUES('0006_mes_finished_goods'),('0007_mes_finished_goods_resolutions')");
-  if (extraMesTable) db.exec('CREATE TABLE mes_finished_goods_batches(id TEXT PRIMARY KEY,organization_id TEXT NOT NULL,work_order_id TEXT NOT NULL);');
+  for (const name of ['0008_mes_erp_mapping.sql', '0009_erp_mes_receipts.sql']) {
+    db.exec(fs.readFileSync(path.join(root, 'tests', 'migration', 'fixtures', name), 'utf8'));
+  }
+  if (extraVersion) db.prepare('INSERT INTO suite_migrations(name) VALUES(?)').run('0010_mes_unknown');
+  if (extraMesTable) db.exec('CREATE TABLE mes_unmapped_feature(id TEXT PRIMARY KEY,organization_id TEXT NOT NULL);');
   db.prepare('INSERT INTO organizations(id,name,slug) VALUES(?,?,?)').run('tenant-a', 'Tenant A', 'tenant-a');
   db.prepare('INSERT INTO organizations(id,name,slug) VALUES(?,?,?)').run('tenant-b', 'Tenant B', 'tenant-b');
   db.prepare('INSERT INTO users(id,email,display_name) VALUES(?,?,?)').run('user-a', 'a@example.test', 'User A');
@@ -41,7 +44,14 @@ function makeSharedSource(file, { badReporter = false, pendingOutbox = false, ex
   db.prepare('INSERT INTO mes_work_centers(id,organization_id,code,name) VALUES(?,?,?,?)').run('center-a', 'tenant-a', 'C-A', 'Center A');
   db.prepare('INSERT INTO mes_work_orders(id,organization_id,order_no,product_id,bom_version_id,target_quantity) VALUES(?,?,?,?,?,?)').run('wo-a', 'tenant-a', 'WO-A', 'product-a', 'bom-a', 10);
   db.prepare('INSERT INTO mes_operations(id,organization_id,work_order_id,sequence,work_center_id,name) VALUES(?,?,?,?,?,?)').run('op-a', 'tenant-a', 'wo-a', 1, 'center-a', 'Cut');
-  db.prepare('INSERT INTO mes_production_reports(id,organization_id,work_order_id,operation_id,operator_id,good_quantity,scrap_quantity) VALUES(?,?,?,?,?,?,?)').run('report-a', 'tenant-a', 'wo-a', 'op-a', 'user-a', 2, 0);
+  db.prepare('INSERT INTO mes_production_reports(id,organization_id,work_order_id,operation_id,operator_id,good_quantity,scrap_quantity) VALUES(?,?,?,?,?,?,?)').run('report-a', 'tenant-a', 'wo-a', 'op-a', 'user-a', 4, 0);
+  db.prepare('INSERT INTO mes_finished_goods_batches(id,organization_id,work_order_id,report_id,batch_number,quantity,status) VALUES(?,?,?,?,?,?,?)').run('batch-a', 'tenant-a', 'wo-a', 'report-a', 'BATCH-A', 2, 'released');
+  db.prepare('INSERT INTO mes_finished_goods_batches(id,organization_id,work_order_id,report_id,batch_number,quantity,status) VALUES(?,?,?,?,?,?,?)').run('batch-b', 'tenant-a', 'wo-a', 'report-a', 'BATCH-B', 2, 'rework');
+  db.prepare('INSERT INTO mes_finished_goods_quality_dispositions(id,organization_id,batch_id,passed_quantity,failed_quantity,disposition,reason) VALUES(?,?,?,?,?,?,?)').run('disposition-a', 'tenant-a', 'batch-a', 2, 0, 'release', 'passed');
+  db.prepare('INSERT INTO mes_finished_goods_quality_dispositions(id,organization_id,batch_id,passed_quantity,failed_quantity,disposition,reason) VALUES(?,?,?,?,?,?,?)').run('disposition-b', 'tenant-a', 'batch-b', 0, 2, 'rework', 'failed');
+  db.prepare('INSERT INTO mes_finished_goods_inventory(id,organization_id,batch_id,quantity_on_hand) VALUES(?,?,?,?)').run('inventory-a', 'tenant-a', 'batch-a', 2);
+  db.prepare('INSERT INTO mes_finished_goods_receipts(id,organization_id,batch_id,quantity,idempotency_key) VALUES(?,?,?,?,?)').run('receipt-a', 'tenant-a', 'batch-a', 2, 'receipt-key');
+  db.prepare('INSERT INTO mes_finished_goods_resolutions(id,organization_id,batch_id,disposition,quantity,reason) VALUES(?,?,?,?,?,?)').run('resolution-a', 'tenant-a', 'batch-b', 'rework', 2, 'reinspect');
   db.prepare('INSERT INTO audit_events(id,organization_id,actor_id,actor_role,action,entity_type,entity_id) VALUES(?,?,?,?,?,?,?)').run('audit-a', 'tenant-a', 'user-a', 'admin', 'mes.report', 'work_order', 'wo-a');
   db.prepare('INSERT INTO audit_events(id,organization_id,actor_id,actor_role,action,entity_type,entity_id) VALUES(?,?,?,?,?,?,?)').run('audit-erp', 'tenant-a', 'user-a', 'admin', 'STATION_GRANT', 'ACCOUNT', 'user-a');
   // The source projection triggers correctly emit events during fixture setup;
@@ -49,6 +59,8 @@ function makeSharedSource(file, { badReporter = false, pendingOutbox = false, ex
   db.exec('DELETE FROM outbox_events');
   if (badReporter) db.prepare('INSERT INTO mes_downtime_events(id,organization_id,work_center_id,start_time,reason,reporter_id) VALUES(?,?,?,?,?,?)').run('down-a', 'tenant-a', 'center-a', '2026-01-01T00:00:00Z', 'test', 'missing-user');
   if (pendingOutbox) db.prepare('INSERT INTO outbox_events(id,organization_id,event_type,payload) VALUES(?,?,?,?)').run('event-a', 'tenant-a', 'mes.work-order.changed', '{}');
+  if (processedOutbox) db.prepare("INSERT INTO outbox_events(id,organization_id,event_type,payload,status) VALUES(?,?,?,?,'processed')").run('event-processed', 'tenant-a', 'shop.paid', '{}');
+  if (populatedErpMapping) db.prepare('INSERT INTO mes_erp_product_mappings(id,organization_id,mes_product_id,erp_item_id,warehouse_id,version,is_active) VALUES(?,?,?,?,?,?,?)').run('mapping-a', 'tenant-a', 'product-a', 'erp-item-a', 'warehouse-a', 1, 1);
   db.close();
 }
 
@@ -76,7 +88,13 @@ test('imports only selected MES tenant, preserves required identities and audit,
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM station_grants WHERE site='erp'").get().n, 0);
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM station_sessions').get().n, 0);
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM audit_events').get().n, 1);
-  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM erp_items').get().n, 0);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM mes_finished_goods_batches').get().n, 2);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM mes_finished_goods_quality_dispositions').get().n, 2);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM mes_finished_goods_inventory').get().n, 1);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM mes_finished_goods_receipts').get().n, 1);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM mes_finished_goods_resolutions').get().n, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name LIKE 'erp_%'").get().n, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name='mes_erp_product_mappings'").get().n, 0);
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM outbox_events WHERE event_type LIKE 'mes.%'").get().n, 1, 'target projection is rebuilt from work orders');
   assert.equal(db.prepare('SELECT version FROM mes_repository_schema').get().version, 1);
   db.close();
@@ -96,13 +114,20 @@ test('fails closed on unresolved MES references and removes partial output', t =
   makeSharedSource(source, { badReporter: true });
   assert.throws(() => migrate(source, destination, ['tenant-a']), /unresolved/);
   assert.equal(fs.existsSync(destination), false);
-  assert.equal(fs.readdirSync(dir).some(name => name.includes('.mes-target-') || name.includes('.mes-source-')), false);
+  assert.equal(fs.readdirSync(dir).some(name => name.startsWith('.mes-migration-')), false);
 });
 
 test('blocks a source with unresolved MES outbox rows', t => {
   const dir = temporary(t), source = path.join(dir, 'shared.sqlite'), destination = path.join(dir, 'mes.sqlite');
   makeSharedSource(source, { pendingOutbox: true });
   assert.throws(() => migrate(source, destination, ['tenant-a']), /outbox contains/);
+  assert.equal(fs.existsSync(destination), false);
+});
+
+test('also blocks processed or unrelated station outbox rows instead of silently dropping them', t => {
+  const dir = temporary(t), source = path.join(dir, 'shared.sqlite'), destination = path.join(dir, 'mes.sqlite');
+  makeSharedSource(source, { processedOutbox: true });
+  assert.throws(() => migrate(source, destination, ['tenant-a']), /Source outbox contains/);
   assert.equal(fs.existsSync(destination), false);
 });
 
@@ -113,7 +138,7 @@ test('refuses a retained identity that also belongs to an unselected tenant', t 
   assert.equal(fs.existsSync(destination), false);
 });
 
-test('refuses an unsupported shared migration ledger before creating any output', t => {
+test('refuses unsupported shared migration ledger before creating any output', t => {
   const dir = temporary(t), source = path.join(dir, 'shared.sqlite'), destination = path.join(dir, 'mes.sqlite');
   makeSharedSource(source, { extraVersion: true });
   assert.throws(() => migrate(source, destination, ['tenant-a']), /Unsupported shared Go migrations/);
@@ -124,5 +149,12 @@ test('refuses newer shared profolio MES tables not present in target schema', t 
   const dir = temporary(t), source = path.join(dir, 'shared.sqlite'), destination = path.join(dir, 'mes.sqlite');
   makeSharedSource(source, { extraMesTable: true });
   assert.throws(() => migrate(source, destination, ['tenant-a']), /Unknown MES tables/);
+  assert.equal(fs.existsSync(destination), false);
+});
+
+test('refuses populated MES-to-ERP mappings rather than copying cross-station references', t => {
+  const dir = temporary(t), source = path.join(dir, 'shared.sqlite'), destination = path.join(dir, 'mes.sqlite');
+  makeSharedSource(source, { populatedErpMapping: true });
+  assert.throws(() => migrate(source, destination, ['tenant-a']), /Cross-station MES\/ERP table/);
   assert.equal(fs.existsSync(destination), false);
 });
