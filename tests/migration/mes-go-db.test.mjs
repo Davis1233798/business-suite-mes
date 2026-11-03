@@ -17,7 +17,7 @@ function temporary(t) {
   return dir;
 }
 
-function makeSharedSource(file, { badReporter = false, pendingOutbox = false, processedOutbox = false, extraMesTable = false, extraVersion = false, populatedErpMapping = false, tenantBMesGrant = false, retryKey = false, wal = false } = {}) {
+function makeSharedSource(file, { badReporter = false, pendingOutbox = false, processedOutbox = false, extraMesTable = false, extraVersion = false, populatedErpMapping = false, tenantBMesGrant = false, retryKey = false, legacyDispositionSchema = false, wal = false } = {}) {
   const db = new DatabaseSync(file);
   // Match the shared Portfolio Go database bootstrap, including its actual
   // common multi-station schema and migration ledger rather than the standalone
@@ -28,6 +28,12 @@ function makeSharedSource(file, { badReporter = false, pendingOutbox = false, pr
   for (const name of ['0008_mes_erp_mapping.sql', '0009_erp_mes_receipts.sql']) {
     db.exec(fs.readFileSync(path.join(root, 'tests', 'migration', 'fixtures', name), 'utf8'));
   }
+  if (legacyDispositionSchema) db.exec(`DROP TABLE mes_finished_goods_quality_dispositions;
+    CREATE TABLE mes_finished_goods_quality_dispositions (
+      id TEXT PRIMARY KEY NOT NULL, organization_id TEXT NOT NULL, batch_id TEXT NOT NULL,
+      passed_quantity INTEGER NOT NULL, failed_quantity INTEGER NOT NULL, disposition TEXT NOT NULL,
+      created_at TEXT NOT NULL DEFAULT CURRENT_TIMESTAMP
+    );`);
   if (extraVersion) db.prepare('INSERT INTO suite_migrations(name) VALUES(?)').run('0010_mes_unknown');
   if (extraMesTable) db.exec('CREATE TABLE mes_unmapped_feature(id TEXT PRIMARY KEY,organization_id TEXT NOT NULL);');
   db.prepare('INSERT INTO organizations(id,name,slug) VALUES(?,?,?)').run('tenant-a', 'Tenant A', 'tenant-a');
@@ -57,8 +63,10 @@ function makeSharedSource(file, { badReporter = false, pendingOutbox = false, pr
   }
   db.prepare('INSERT INTO mes_finished_goods_batches(id,organization_id,work_order_id,report_id,batch_number,quantity,status) VALUES(?,?,?,?,?,?,?)').run('batch-a', 'tenant-a', 'wo-a', 'report-a', 'BATCH-A', 2, 'released');
   db.prepare('INSERT INTO mes_finished_goods_batches(id,organization_id,work_order_id,report_id,batch_number,quantity,status) VALUES(?,?,?,?,?,?,?)').run('batch-b', 'tenant-a', 'wo-a', 'report-a', 'BATCH-B', 2, 'rework');
-  db.prepare('INSERT INTO mes_finished_goods_quality_dispositions(id,organization_id,batch_id,passed_quantity,failed_quantity,disposition,reason) VALUES(?,?,?,?,?,?,?)').run('disposition-a', 'tenant-a', 'batch-a', 2, 0, 'release', 'passed');
-  db.prepare('INSERT INTO mes_finished_goods_quality_dispositions(id,organization_id,batch_id,passed_quantity,failed_quantity,disposition,reason) VALUES(?,?,?,?,?,?,?)').run('disposition-b', 'tenant-a', 'batch-b', 0, 2, 'rework', 'failed');
+  const dispositionColumns = legacyDispositionSchema ? 'id,organization_id,batch_id,passed_quantity,failed_quantity,disposition' : 'id,organization_id,batch_id,passed_quantity,failed_quantity,disposition,reason';
+  const dispositionValues = legacyDispositionSchema ? '?,?,?,?,?,?' : '?,?,?,?,?,?,?';
+  db.prepare(`INSERT INTO mes_finished_goods_quality_dispositions(${dispositionColumns}) VALUES(${dispositionValues})`).run(...(legacyDispositionSchema ? ['disposition-a','tenant-a','batch-a',2,0,'release'] : ['disposition-a','tenant-a','batch-a',2,0,'release','passed']));
+  db.prepare(`INSERT INTO mes_finished_goods_quality_dispositions(${dispositionColumns}) VALUES(${dispositionValues})`).run(...(legacyDispositionSchema ? ['disposition-b','tenant-a','batch-b',0,2,'rework'] : ['disposition-b','tenant-a','batch-b',0,2,'rework','failed']));
   db.prepare('INSERT INTO mes_finished_goods_inventory(id,organization_id,batch_id,quantity_on_hand) VALUES(?,?,?,?)').run('inventory-a', 'tenant-a', 'batch-a', 2);
   db.prepare('INSERT INTO mes_finished_goods_receipts(id,organization_id,batch_id,quantity,idempotency_key) VALUES(?,?,?,?,?)').run('receipt-a', 'tenant-a', 'batch-a', 2, 'receipt-key');
   db.prepare('INSERT INTO mes_finished_goods_resolutions(id,organization_id,batch_id,disposition,quantity,reason) VALUES(?,?,?,?,?,?)').run('resolution-a', 'tenant-a', 'batch-b', 'rework', 2, 'reinspect');
@@ -129,6 +137,17 @@ test('preserves verified MES report retry key and response while excluding other
     encoding: 'utf8',
   });
   assert.equal(replay.status, 0, `Go API replay verification failed:\n${replay.stdout}\n${replay.stderr}`);
+});
+
+test('upgrades the known early finished-goods disposition shape and preserves its rows', t => {
+  const dir = temporary(t), source = path.join(dir, 'shared.sqlite'), destination = path.join(dir, 'mes.sqlite');
+  makeSharedSource(source, { legacyDispositionSchema: true });
+  migrate(source, destination, ['tenant-a']);
+  const db = new DatabaseSync(destination, { readOnly: true });
+  const row = db.prepare("SELECT id,quality_check_id,reinspection_after,reason FROM mes_finished_goods_quality_dispositions WHERE id='disposition-a'").get();
+  assert.deepEqual(row, {id:'disposition-a',quality_check_id:null,reinspection_after:0,reason:''});
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM mes_finished_goods_quality_dispositions').get().n, 2);
+  db.close();
 });
 
 test('refuses existing destination without changing source or destination', t => {

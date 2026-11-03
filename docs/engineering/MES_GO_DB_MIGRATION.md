@@ -35,6 +35,10 @@ Finished-goods schema from profolio migrations `0006` and `0007` is included in
 the independent MES Go target. The latest profolio `0008`/`0009` MES/ERP model is
 cross-station state and is not copied. Application-level checks supplement
 `PRAGMA foreign_key_check`, since older MES core tables have few declared FKs.
+For a source disposition table that predates the three additive columns
+`quality_check_id`, `reinspection_after`, and `reason`, the importer preserves
+all rows and supplies only the documented defaults `NULL`, `0`, and `''`.
+Other source/target column differences remain fail-closed.
 
 ## Importer safety properties
 

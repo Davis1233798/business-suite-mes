@@ -51,12 +51,21 @@ function assertRowsEqual(sourceRows, targetRows, table) {
 }
 
 function copyRows(source, target, table, where, params) {
-  const cols = columns(source, table);
-  if (cols.join('\0') !== columns(target, table).join('\0')) throw new Error(`Schema mismatch: ${table}`);
-  const fields = cols.map(q).join(',');
-  const sourceRows = source.prepare(`SELECT ${fields} FROM ${q(table)} WHERE ${where} ORDER BY ${fields}`).all(...params);
-  const insert = target.prepare(`INSERT INTO ${q(table)} (${fields}) VALUES (${cols.map(() => '?').join(',')})`);
-  for (const row of sourceRows) insert.run(...cols.map(col => row[col]));
+  const sourceCols = columns(source, table);
+  const targetCols = columns(target, table);
+  const optionalFinishedQualityDefaults = table === 'mes_finished_goods_quality_dispositions'
+    ? new Map([['quality_check_id', 'NULL'], ['reinspection_after', '0'], ['reason', "''"]])
+    : new Map();
+  const sourceSet = new Set(sourceCols), targetSet = new Set(targetCols);
+  const extra = sourceCols.filter(col => !targetSet.has(col));
+  const missing = targetCols.filter(col => !sourceSet.has(col));
+  if (extra.length || missing.some(col => !optionalFinishedQualityDefaults.has(col))) throw new Error(`Schema mismatch: ${table}`);
+  const fields = targetCols.map(q).join(',');
+  const projection = targetCols.map(col => sourceSet.has(col) ? q(col) : `${optionalFinishedQualityDefaults.get(col)} AS ${q(col)}`).join(',');
+  const order = sourceCols.map(q).join(',');
+  const sourceRows = source.prepare(`SELECT ${projection} FROM ${q(table)} WHERE ${where} ORDER BY ${order}`).all(...params);
+  const insert = target.prepare(`INSERT INTO ${q(table)} (${fields}) VALUES (${targetCols.map(() => '?').join(',')})`);
+  for (const row of sourceRows) insert.run(...targetCols.map(col => row[col]));
   const targetRows = target.prepare(`SELECT ${fields} FROM ${q(table)} WHERE ${where} ORDER BY ${fields}`).all(...params);
   assertRowsEqual(sourceRows, targetRows, table);
   return sourceRows.length;

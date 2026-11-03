@@ -9,6 +9,43 @@ import (
 	"testing"
 )
 
+func stageMESFinishedGoodsMaterials(t *testing.T, a *App, org, workOrder string, target int, admin, operator []*http.Cookie) {
+	t.Helper()
+	var bom string
+	if err := a.db.QueryRow("SELECT bom_version_id FROM mes_work_orders WHERE organization_id=? AND id=?", org, workOrder).Scan(&bom); err != nil {
+		t.Fatal(err)
+	}
+	rows, err := a.db.Query(`SELECT b.material_sku,SUM(b.quantity_per_unit),COALESCE((SELECT SUM(m.net_quantity) FROM mes_work_order_materials m WHERE m.organization_id=b.organization_id AND m.work_order_id=? AND m.material_sku=b.material_sku),0) FROM mes_bom_items b WHERE b.organization_id=? AND b.bom_version_id=? GROUP BY b.material_sku`, workOrder, org, bom)
+	if err != nil {
+		t.Fatal(err)
+	}
+	type item struct { sku string; perUnit, staged int }
+	items := []item{}
+	for rows.Next() {
+		var value item
+		if err = rows.Scan(&value.sku, &value.perUnit, &value.staged); err != nil { rows.Close(); t.Fatal(err) }
+		items = append(items, value)
+	}
+	if err = rows.Err(); err != nil { rows.Close(); t.Fatal(err) }
+	rows.Close()
+	if len(items) == 0 { t.Fatal("work order BOM has no material lines") }
+	for _, value := range items {
+		missing := value.perUnit*target - value.staged
+		if missing <= 0 { continue }
+		lotNumber := "FG-TEST-" + token()[:12]
+		lot := request(a, http.MethodPost, "/api/stations/mes/operations", map[string]any{"action":"createLot","materialSku":value.sku,"lotNumber":lotNumber,"lotQuantity":missing,"idempotencyKey":"fg-create-lot-"+token()[:16]}, admin...)
+		if lot.Code != http.StatusOK { t.Fatalf("create test material lot %s: %d %s", value.sku, lot.Code, lot.Body.String()) }
+		var result struct { Data struct { LotID string `json:"lotId"` } `json:"data"` }
+		if err = json.Unmarshal(lot.Body.Bytes(), &result); err != nil || result.Data.LotID == "" { t.Fatalf("invalid created lot: %v %s", err, lot.Body.String()) }
+		issued := request(a, http.MethodPost, "/api/stations/mes/operations", map[string]any{"action":"material","workOrderId":workOrder,"lotId":result.Data.LotID,"issued":missing,"returned":0,"idempotencyKey":"fg-issue-"+token()[:16]}, operator...)
+		if issued.Code != http.StatusOK { t.Fatalf("issue test material %s: %d %s", value.sku, issued.Code, issued.Body.String()) }
+	}
+	var staged int
+	if err = a.db.QueryRow("SELECT materials_staged FROM mes_work_orders WHERE organization_id=? AND id=?", org, workOrder).Scan(&staged); err != nil || staged != 1 {
+		t.Fatalf("BOM material issue did not stage work order: staged=%d err=%v", staged, err)
+	}
+}
+
 // These tests define the HTTP contract for traceable finished-goods batches.
 // A report being completed is not a quality release; only explicitly released
 // batch quantity may be received into MES finished-goods inventory.
@@ -29,6 +66,7 @@ func TestMESFinishedGoodsReleaseReceiptAndClose(t *testing.T) {
 	if err := a.db.QueryRow("SELECT id FROM mes_operations WHERE organization_id=? AND work_order_id=? LIMIT 1", org, wo).Scan(&op); err != nil {
 		t.Fatal(err)
 	}
+	stageMESFinishedGoodsMaterials(t, a, org, wo, target, admin, operator)
 	path := "/api/stations/mes/finished-goods"
 	post := func(input map[string]any, cookies ...*http.Cookie) *httptest.ResponseRecorder {
 		return request(a, http.MethodPost, path, input, cookies...)
@@ -256,6 +294,7 @@ func TestMESFinishedGoodsHappyPathIdempotencyAndBounds(t *testing.T) {
 	if err := a.db.QueryRow("SELECT id FROM mes_operations WHERE organization_id=? AND work_order_id=? LIMIT 1", org, wo).Scan(&op); err != nil {
 		t.Fatal(err)
 	}
+	stageMESFinishedGoodsMaterials(t, a, org, wo, target, admin, operator)
 	if w := request(a, "POST", "/api/stations/mes/business", map[string]any{"action": "start", "workOrderId": wo}, admin...); w.Code != http.StatusOK {
 		t.Fatalf("start: %d %s", w.Code, w.Body.String())
 	}
@@ -460,6 +499,7 @@ func TestMESFinishedGoodsConcurrentReceiptAndHistoricalCompletedOrder(t *testing
 	if err := a.db.QueryRow("SELECT id FROM mes_operations WHERE organization_id=? AND work_order_id=? LIMIT 1", org, wo).Scan(&op); err != nil {
 		t.Fatal(err)
 	}
+	stageMESFinishedGoodsMaterials(t, a, org, wo, target, admin, operator)
 	if w := request(a, "POST", "/api/stations/mes/business", map[string]any{"action": "start", "workOrderId": wo}, admin...); w.Code != http.StatusOK {
 		t.Fatalf("start: %d %s", w.Code, w.Body.String())
 	}
@@ -550,6 +590,7 @@ func TestMESFinishedGoodsFullyScrappedOrderClosesWithoutInventory(t *testing.T) 
 	if err := a.db.QueryRow("SELECT id FROM mes_operations WHERE organization_id=? AND work_order_id=? LIMIT 1", org, order).Scan(&operation); err != nil {
 		t.Fatal(err)
 	}
+	stageMESFinishedGoodsMaterials(t, a, org, order, target, admin, operator)
 	if w := request(a, "POST", "/api/stations/mes/business", map[string]any{"action": "start", "workOrderId": order}, admin...); w.Code != http.StatusOK {
 		t.Fatalf("start: %d %s", w.Code, w.Body.String())
 	}
