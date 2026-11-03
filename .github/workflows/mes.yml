@@ -6,6 +6,33 @@ permissions:
   contents: read
   packages: write
 jobs:
+  windows-desktop:
+    needs: mes
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - run: npm run install:ci
+      - name: Check MES desktop identity and data boundaries
+        run: node --test tests/desktop-identity.test.cjs
+      - name: Build Windows MES desktop backend and assets
+        run: npm run desktop:prepare
+      - name: Package unpacked Windows MES desktop app
+        run: npm run desktop:package
+      - uses: actions/upload-artifact@v4
+        with:
+          name: forgeflow-mes-windows-${{ github.sha }}
+          path: outputs/desktop/win-unpacked/
+          if-no-files-found: error
+          retention-days: 7
+
   mes:
     runs-on: ubuntu-latest
     timeout-minutes: 30
@@ -40,8 +67,26 @@ jobs:
         run: bash infra/linux/test-mes-deployment.sh
       - name: Verify deployment workflow boundary contract
         run: python3 infra/linux/test-mes-workflow-contract.py
+
+  release:
+    needs: [mes, windows-desktop]
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    permissions:
+      contents: read
+      packages: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - name: Verify main head before release artifacts
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha | grep -Fx "$GITHUB_SHA"
       - name: Package exact main source for deployment
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         run: |
           set -euo pipefail
           mkdir -p deploy-artifact
@@ -49,25 +94,23 @@ jobs:
           (cd deploy-artifact && sha256sum mes-source.tgz > mes-source.tgz.sha256)
           printf '%s\n' "$GITHUB_SHA" > deploy-artifact/commit.sha
       - uses: actions/upload-artifact@v4
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         with:
           name: mes-release-${{ github.sha }}
           path: deploy-artifact/
           retention-days: 1
           if-no-files-found: error
-      - name: Publish MES image on main
-        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+      - name: Publish MES image after all platform builds
         env:
           GHCR_TOKEN: ${{ secrets.GITHUB_TOKEN }}
         run: |
           set -euo pipefail
           image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/business-suite-mes"
+          docker build -f infra/linux/Dockerfile.station -t "$image:${GITHUB_SHA}" .
           printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
-          docker tag mes-ci:${GITHUB_SHA} "$image:${GITHUB_SHA}"
           docker push "$image:${GITHUB_SHA}"
 
   deploy:
-    needs: mes
+    needs: [mes, windows-desktop, release]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.MES_DEPLOY_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20

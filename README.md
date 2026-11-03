@@ -30,6 +30,12 @@ Go 工作站可從 `http://127.0.0.1:8095/mes/login` 進入。Go 預設資料庫
 
 本站 `npm test`、Go 測試及建置曾通過；測試已裁剪為本站範圍，原跨系統測試留在作品集 repo，不能視為跨系統或正式部署驗收。Vinext 開發模式 HTTP smoke 已檢查本站、health 與他站拒絕，尚未涵蓋全部業務流程。
 
+## Windows 桌面版
+
+Windows 桌面套件以 `org.blockchen.forgeflow.mes` 作為 Electron appId，並使用 `%APPDATA%\ForgeFlow MES` 作為專屬 `userData` 目錄；Go 工作站資料庫位於該目錄的 `mes-repository.sqlite`。桌面版只使用本 repository 隨附的 MES Go backend 與 web assets，不會讀取或遷移作品集、ERP、CRM、POS、餐飲或電商的資料庫。既有桌面資料不會自動搬入此路徑。此版本仍未提供靜態加密或正式備份／復原功能。
+
+Windows CI 會建立 Go backend、MES web assets 及未安裝的 Windows 桌面套件；本機開發可用 `npm run desktop:prepare` 後執行 `npm run desktop:package`。
+
 ## D1 與部署
 
 `drizzle/mes_d1_new_database.sql` 僅供**新空 D1** 初始化；Worker 缺少本站標記時回傳 503。本站 bootstrap 已在隔離的本地 Wrangler D1 執行，production bundle 的本地 Worker `/api/health` 回傳 200 且顯示資料庫連線；並已執行本站一項代表性業務寫入及讀回；這不涵蓋遠端 D1、全部業務流程或部署。新 D1 的雲端部署與資料移轉尚未驗證。不要套用至舊資料庫、覆蓋既有 hosting identity 或直接切換正式站；先完成備份、遷移、核對及回滾計畫。
