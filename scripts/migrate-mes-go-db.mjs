@@ -14,7 +14,7 @@ export const MES_TABLES = [
   'mes_finished_goods_receipts', 'mes_finished_goods_resolutions',
 ];
 export const COPY_TABLES = ['organizations', 'users', 'memberships', ...MES_TABLES, 'audit_events', 'station_accounts', 'station_grants'];
-export const RESET_TABLES = ['station_sessions', 'station_login_limits', 'idempotency_keys', 'demo_seed_states', 'traffic_runs', 'traffic_records'];
+export const RESET_TABLES = ['station_sessions', 'station_login_limits', 'demo_seed_states', 'traffic_runs', 'traffic_records'];
 export const REBUILT_TABLES = ['outbox_events', 'suite_migrations', 'mes_projection_revisions'];
 export const EXCLUDED_PREFIXES = ['erp_', 'pos_', 'crm_', 'dining_', 'shop_'];
 export const CROSS_STATION_TABLES = ['mes_erp_product_mappings', 'erp_mes_receipt_postings'];
@@ -225,8 +225,21 @@ export function migrate(sourcePath, destinationPath, organizationIds, { afterSna
     copied.station_grants = accountIds.length
       ? copyRows(backup, target, 'station_grants', `site='mes' AND user_id IN (${accountIds.map(() => '?').join(',')})`, accountIds)
       : 0;
-    // Keep the MES mark and account hashes; never copy live sessions, lockouts,
-    // idempotency history, unrelated grants, or non-MES rows.
+    // MES report retry state is durable business state: dropping it could let a
+    // client retry create a second production report after cutover. Copy only
+    // the known MES endpoint keys for selected tenants, and require each key to
+    // match an imported report. Other stations' keys remain excluded.
+    const mesKeys = backup.prepare(`SELECT id,organization_id,key,endpoint,request_hash,response_status,response_body FROM idempotency_keys WHERE organization_id IN (${marks}) AND endpoint='/station/mes/report' ORDER BY id`).all(...selectedOrgIds);
+    for (const row of mesKeys) {
+      const report = backup.prepare('SELECT id FROM mes_production_reports WHERE organization_id=? AND idempotency_key=?').get(row.organization_id, row.key);
+      if (!report || row.response_status !== 200 || !row.request_hash || !row.response_body) throw new Error(`Unverifiable MES retry key for ${row.organization_id}; reconcile before migration`);
+      let response;
+      try { response = JSON.parse(row.response_body); } catch { throw new Error(`Invalid stored MES retry response for ${row.organization_id}`); }
+      if (response?.reportId !== report.id) throw new Error(`MES retry response does not match report ${report.id}`);
+    }
+    copied.idempotency_keys = copyRows(backup, target, 'idempotency_keys', `organization_id IN (${marks}) AND endpoint='/station/mes/report'`, selectedOrgIds);
+    // Keep the MES mark, account hashes, and verified MES retry state; never
+    // copy live sessions, lockouts, unrelated grants, or non-MES keys.
     target.exec('PRAGMA foreign_keys=ON');
     const violations = target.prepare('PRAGMA foreign_key_check').all();
     if (violations.length) throw new Error(`Destination foreign key check failed (${violations.length} rows)`);

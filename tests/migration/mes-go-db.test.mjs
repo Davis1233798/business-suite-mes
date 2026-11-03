@@ -16,7 +16,7 @@ function temporary(t) {
   return dir;
 }
 
-function makeSharedSource(file, { badReporter = false, pendingOutbox = false, processedOutbox = false, extraMesTable = false, extraVersion = false, populatedErpMapping = false, tenantBMesGrant = false, wal = false } = {}) {
+function makeSharedSource(file, { badReporter = false, pendingOutbox = false, processedOutbox = false, extraMesTable = false, extraVersion = false, populatedErpMapping = false, tenantBMesGrant = false, retryKey = false, wal = false } = {}) {
   const db = new DatabaseSync(file);
   // Match the shared Portfolio Go database bootstrap, including its actual
   // common multi-station schema and migration ledger rather than the standalone
@@ -47,6 +47,13 @@ function makeSharedSource(file, { badReporter = false, pendingOutbox = false, pr
   db.prepare('INSERT INTO mes_work_orders(id,organization_id,order_no,product_id,bom_version_id,target_quantity) VALUES(?,?,?,?,?,?)').run('wo-a', 'tenant-a', 'WO-A', 'product-a', 'bom-a', 10);
   db.prepare('INSERT INTO mes_operations(id,organization_id,work_order_id,sequence,work_center_id,name) VALUES(?,?,?,?,?,?)').run('op-a', 'tenant-a', 'wo-a', 1, 'center-a', 'Cut');
   db.prepare('INSERT INTO mes_production_reports(id,organization_id,work_order_id,operation_id,operator_id,good_quantity,scrap_quantity) VALUES(?,?,?,?,?,?,?)').run('report-a', 'tenant-a', 'wo-a', 'op-a', 'user-a', 4, 0);
+  if (retryKey) {
+    db.prepare('UPDATE mes_production_reports SET idempotency_key=? WHERE id=?').run('report-retry-001', 'report-a');
+    const payload = JSON.stringify({action:'report',workOrderId:'wo-a',operationId:'op-a',goodQuantity:4,scrapQuantity:0,notes:'',idempotencyKey:'report-retry-001'});
+    const requestHash = createHash('sha256').update(`user-a\0${payload}`).digest('hex');
+    db.prepare('INSERT INTO idempotency_keys(id,organization_id,key,endpoint,request_hash,response_status,response_body) VALUES(?,?,?,?,?,?,?)').run('idem-a', 'tenant-a', 'report-retry-001', '/station/mes/report', requestHash, 200, JSON.stringify({workOrderId:'wo-a',reportId:'report-a',goodQuantity:4,scrapQuantity:0,totalCompleted:4,totalScrapped:0,status:'in_progress'}));
+    db.prepare('INSERT INTO idempotency_keys(id,organization_id,key,endpoint,request_hash,response_status,response_body) VALUES(?,?,?,?,?,?,?)').run('idem-other', 'tenant-a', 'other-station-001', '/api/shop/checkout', 'other-hash', 200, '{}');
+  }
   db.prepare('INSERT INTO mes_finished_goods_batches(id,organization_id,work_order_id,report_id,batch_number,quantity,status) VALUES(?,?,?,?,?,?,?)').run('batch-a', 'tenant-a', 'wo-a', 'report-a', 'BATCH-A', 2, 'released');
   db.prepare('INSERT INTO mes_finished_goods_batches(id,organization_id,work_order_id,report_id,batch_number,quantity,status) VALUES(?,?,?,?,?,?,?)').run('batch-b', 'tenant-a', 'wo-a', 'report-a', 'BATCH-B', 2, 'rework');
   db.prepare('INSERT INTO mes_finished_goods_quality_dispositions(id,organization_id,batch_id,passed_quantity,failed_quantity,disposition,reason) VALUES(?,?,?,?,?,?,?)').run('disposition-a', 'tenant-a', 'batch-a', 2, 0, 'release', 'passed');
@@ -100,6 +107,20 @@ test('imports only selected MES tenant, preserves required identities and audit,
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name='mes_erp_product_mappings'").get().n, 0);
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM outbox_events WHERE event_type LIKE 'mes.%'").get().n, 1, 'target projection is rebuilt from work orders');
   assert.equal(db.prepare('SELECT version FROM mes_repository_schema').get().version, 1);
+  db.close();
+});
+
+test('preserves verified MES report retry key and response while excluding other station keys', t => {
+  const dir = temporary(t), source = path.join(dir, 'shared.sqlite'), destination = path.join(dir, 'mes.sqlite');
+  makeSharedSource(source, { retryKey: true });
+  migrate(source, destination, ['tenant-a']);
+  const db = new DatabaseSync(destination, { readOnly: true });
+  const row = db.prepare("SELECT request_hash,response_status,response_body FROM idempotency_keys WHERE organization_id='tenant-a' AND key='report-retry-001' AND endpoint='/station/mes/report'").get();
+  assert.match(row.request_hash, /^[0-9a-f]{64}$/);
+  assert.equal(row.response_status, 200);
+  assert.equal(JSON.parse(row.response_body).reportId, 'report-a');
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM idempotency_keys WHERE endpoint='/api/shop/checkout'").get().n, 0);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM mes_production_reports WHERE idempotency_key='report-retry-001'").get().n, 1);
   db.close();
 });
 
