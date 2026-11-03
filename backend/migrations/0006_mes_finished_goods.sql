@@ -137,4 +137,3 @@ BEGIN
 END;
 
 INSERT OR IGNORE INTO suite_migrations(name) VALUES ('0006_mes_finished_goods');
-

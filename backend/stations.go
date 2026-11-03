@@ -15,7 +15,7 @@ type Dataset struct {
 }
 
 var datasets = map[string][]Dataset{
-	"mes": {{"products", "mes_products", "Products", []string{"id", "sku", "name", "unit", "status"}}, {"workOrders", "mes_work_orders", "Work orders", []string{"id", "order_no", "product_id", "status", "target_quantity", "completed_quantity", "scrapped_quantity"}}, {"lots", "mes_material_lots", "Material lots", []string{"id", "lot_number", "material_sku", "current_quantity", "status"}}, {"reports", "mes_production_reports", "Production reports", []string{"id", "work_order_id", "good_quantity", "scrap_quantity", "created_at"}}, {"qualityChecks", "mes_quality_checks", "Quality checks", nil}, {"workCenters", "mes_work_centers", "Work centers", []string{"id", "code", "name", "status"}}, {"materials", "mes_work_order_materials", "Material movements", nil}, {"bomVersions", "mes_bom_versions", "BOM versions", nil}, {"bomItems", "mes_bom_items", "BOM items", nil}, {"downtimeEvents", "mes_downtime_events", "Downtime", nil}},
+	"mes": {{"products", "mes_products", "Products", []string{"id", "sku", "name", "unit", "status"}}, {"workOrders", "mes_work_orders", "Work orders", []string{"id", "order_no", "product_id", "status", "target_quantity", "completed_quantity", "scrapped_quantity"}}, {"operations", "mes_operations", "Operations", []string{"id", "work_order_id", "sequence", "name", "status"}}, {"lots", "mes_material_lots", "Material lots", []string{"id", "lot_number", "material_sku", "current_quantity", "status"}}, {"reports", "mes_production_reports", "Production reports", []string{"id", "work_order_id", "operation_id", "operator_id", "good_quantity", "scrap_quantity", "idempotency_key", "created_at"}}, {"qualityChecks", "mes_quality_checks", "Quality checks", []string{"id", "work_order_id", "report_id", "sample_quantity", "passed_quantity", "failed_quantity", "status", "disposition", "created_at"}}, {"workCenters", "mes_work_centers", "Work centers", []string{"id", "code", "name", "status"}}, {"materials", "mes_work_order_materials", "Material movements", nil}, {"bomVersions", "mes_bom_versions", "BOM versions", nil}, {"bomItems", "mes_bom_items", "BOM items", nil}, {"downtimeEvents", "mes_downtime_events", "Downtime", []string{"id", "work_center_id", "start_time", "end_time", "duration_minutes", "reason", "status"}}, {"finishedGoodsBatches", "mes_finished_goods_batches", "Finished goods batches", nil}, {"finishedGoodsQualityDispositions", "mes_finished_goods_quality_dispositions", "Finished goods quality dispositions", nil}, {"finishedGoodsResolutions", "mes_finished_goods_resolutions", "Finished goods resolutions", nil}, {"finishedGoodsInventory", "mes_finished_goods_inventory", "Finished goods inventory", nil}, {"finishedGoodsReceipts", "mes_finished_goods_receipts", "Finished goods receipts", nil}},
 }
 
 func camel(s string) string {
@@ -76,6 +76,14 @@ func (a *App) stationAPI(w http.ResponseWriter, r *http.Request) {
 	}
 	if action == "business" && site == "mes" {
 		a.mesBusiness(w, r, id, g)
+		return
+	}
+	if action == "operations" && site == "mes" {
+		a.mesOperations(w, r, id, g)
+		return
+	}
+	if action == "finished-goods" && site == "mes" {
+		a.mesFinishedGoods(w, r, id, g)
 		return
 	}
 	if action == "data" && r.Method == "GET" {
@@ -205,6 +213,7 @@ func (a *App) manageUser(w http.ResponseWriter, r *http.Request, id *Identity, s
 type PrintKind struct{ Site, Dataset, Title, Lines, ForeignKey string }
 
 var printKinds = map[string]PrintKind{
+	"mes-finished-goods-label": {"mes", "finishedGoodsBatches", "Finished goods label", "", ""},
 	"mes-lot-label": {"mes", "lots", "Material label", "", ""}, "mes-order-label": {"mes", "workOrders", "Work order label", "", ""}, "mes-order": {"mes", "workOrders", "Work orders", "mes_work_order_materials", "work_order_id"}, "mes-report": {"mes", "reports", "Production report", "", ""},
 }
 
