@@ -9,6 +9,31 @@ script = Path("infra/linux/deploy-mes-release.sh").read_text()
 docs = Path("docs/deployment/ISOLATED_DEPLOYMENT.md").read_text()
 acceptance = Path("infra/linux/test-mes-deployment.sh").read_text()
 
+# Execute the workflow's checksum path convention against a downloaded artifact layout.
+with tempfile.TemporaryDirectory(prefix="mes-artifact-checksum-") as temporary:
+    root = Path(temporary)
+    artifact_dir = root / "deploy-artifact"
+    artifact_dir.mkdir()
+    (artifact_dir / "mes-source.tgz").write_bytes(b"MES source archive checksum round-trip fixture\n")
+    if "(cd deploy-artifact && sha256sum mes-source.tgz > mes-source.tgz.sha256)" in workflow:
+        checksum_command = ["sha256sum", "mes-source.tgz"]
+        checksum_cwd = artifact_dir
+    elif "sha256sum deploy-artifact/mes-source.tgz > deploy-artifact/mes-source.tgz.sha256" in workflow:
+        checksum_command = ["sha256sum", "deploy-artifact/mes-source.tgz"]
+        checksum_cwd = root
+    else:
+        raise SystemExit("Workflow checksum generation command is not covered by the artifact round-trip test")
+    with (artifact_dir / "mes-source.tgz.sha256").open("wb") as output:
+        subprocess.run(checksum_command, cwd=checksum_cwd, check=True, stdout=output)
+    verification = subprocess.run(
+        ["sha256sum", "--check", "mes-source.tgz.sha256"],
+        cwd=artifact_dir,
+        capture_output=True,
+        text=True,
+    )
+    if verification.returncode:
+        raise SystemExit(f"Artifact checksum does not survive upload/download layout: {verification.stderr.strip()}")
+
 required = {
     "main-only deployment": "github.ref == 'refs/heads/main'",
     "explicit opt-in": "vars.MES_DEPLOY_ENABLED == 'true'",
@@ -50,15 +75,5 @@ for value in ("compose_volume_matches", "A missed volume substitution passed the
     if value not in acceptance:
         raise SystemExit(f"Remote acceptance is missing test-volume safety coverage: {value}")
 
-# Exercise the exact artifact-relative checksum round trip used by the workflow.
-with tempfile.TemporaryDirectory(prefix="mes-artifact-checksum-") as temporary:
-    artifact_dir = Path(temporary) / "deploy-artifact"
-    artifact_dir.mkdir()
-    archive = artifact_dir / "mes-source.tgz"
-    checksum = artifact_dir / "mes-source.tgz.sha256"
-    archive.write_bytes(b"MES source archive checksum round-trip fixture\n")
-    with checksum.open("wb") as output:
-        subprocess.run(["sha256sum", "mes-source.tgz"], cwd=artifact_dir, check=True, stdout=output)
-    subprocess.run(["sha256sum", "--check", "mes-source.tgz.sha256"], cwd=artifact_dir, check=True)
 
 print("MES deployment workflow and isolation contract passed.")
