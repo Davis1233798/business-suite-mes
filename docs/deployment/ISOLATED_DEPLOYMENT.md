@@ -8,6 +8,12 @@
 
 本次只部署此 repo 的 Go 工作站映像；它用自己的 SQLite volume。Vinext/Cloudflare Workers、D1 資料庫與既有展示資料不會自動遷移或共用。MES 根 hostname/DNS/Caddy 設定由維運人員另行審核；此部署器只在明確設定的 loopback port 提供 upstream，預設不建立公開入口。
 
+## 跨主機路由限制
+
+Profolio PR17 的 MES Caddy route 連到同一台 host 的 rootful Docker network `business-suite-mes_default`。本方案將 MES 放在另一台專用 host 的 rootless Docker daemon；該 daemon 的 network namespace 與 `business-suite-mes_default` 無關，Caddy 不能用 Docker service name `mes-station` 到達它。`127.0.0.1:18095` 只在 MES host 本機有效，因此不能當作中央 Caddy 的跨主機 upstream。
+
+本 PR 只部署專用 host 上的 MES service，不完成公開 hostname cutover；不可執行依賴同機 Docker network 的 Profolio `cutover-mes-public-route.sh` 來宣稱路由已切換。日後若要公開化，需另案核准跨主機私網與加密 transport（例如 VPN 私網加 upstream TLS/mTLS）、明確防火牆來源限制、端到端 health/授權驗收，並在 Profolio repo 修改中央 IaC。不得為了接通而把 MES 加回中央 rootful Docker daemon、共用 Docker group 或共用資料 volume。
+
 ## 發布流程與邊界
 
 1. `main` push 的 CI 驗證成功後，將該 commit 的 source archive 與 SHA-256 作為短期 artifact。部署 job 僅在 `MES_DEPLOY_ENABLED=true` 時進入 `mes-production` GitHub Environment；需在 GitHub 外部配置專用部署帳號與專屬 SSH secrets。工作流程以預先核對的 known-host key、`StrictHostKeyChecking=yes` 將 archive 以 SSH stdin 傳給固定 forced command；不使用 SCP/SFTP、不上傳或遠端執行 CI 提供的 shell script。請求只包含完整 Git SHA 與 archive SHA-256。部署器拒絕不符合格式的輸入及校驗失敗的 archive。未設定啟用變數或 secrets 時不部署。
@@ -16,7 +22,7 @@
 4. 僅以 `http://127.0.0.1:<MES_DEPLOY_PORT>/api/health` 驗證。連續健康檢查成功後才更新 `/srv/business-suite-mes/current` symlink。
 5. 建置、啟動或健康檢查失敗時，僅用 MES 專案回復先前映像/設定並重新等待 health。資料 volume 不刪除、不回復舊快照；資料 schema migration 若不可逆，不在本範本支援範圍，必須另備升級與恢復設計。
 
-Compose project、volume 與 loopback port 在正式環境不可覆寫；部署前須確認 port 未被占用且 Docker 名稱沒有外站資源衝突。此 port 不應直接開放公網。前置代理需由獨立、明確核准的變更接到 `127.0.0.1:18095`，不得覆寫共享 Caddy 設定。部署 job 不建立 DNS、TLS、Caddy route 或公開 ingress。
+Compose project、volume 與 loopback port 在正式環境不可覆寫；部署前須確認 port 未被占用且 Docker 名稱沒有外站資源衝突。此 port 不應直接開放公網。若專用 MES host 設自己的 reverse proxy，可接本機 `127.0.0.1:18095`。中央 Caddy 位於另一台 host，不能存取 MES host 的 loopback；跨主機路由要求另案設計，見下節。部署 job 不建立 DNS、TLS、Caddy route 或公開 ingress。
 
 ## 主機前置條件及權限
 

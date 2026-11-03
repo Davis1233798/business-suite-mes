@@ -108,7 +108,7 @@ for value in ("/var/run/docker.sock", "privileged: true", "network_mode: host"):
     if value in compose:
         raise SystemExit(f"MES Compose contract contains a forbidden host escape: {value}")
 
-for value in ("business-suite-mes/v1", "business-suite-mes-station-data", "MES_DEPLOY_ENABLED=true", "mes-production", "rootless", "ForceCommand"):
+for value in ("business-suite-mes/v1", "business-suite-mes-station-data", "MES_DEPLOY_ENABLED=true", "mes-production", "rootless", "ForceCommand", "business-suite-mes_default", "跨主機", "mTLS", "不完成公開 hostname cutover"):
     if value not in docs:
         raise SystemExit(f"Deployment boundary documentation is missing: {value}")
 
