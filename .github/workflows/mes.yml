@@ -67,6 +67,8 @@ jobs:
           test "$(curl --silent -o /dev/null -w '%{http_code}' http://127.0.0.1:18095/erp/login)" = 404
       - name: Verify isolated deployment and rollback
         run: bash infra/linux/test-mes-deployment.sh
+      - name: Verify gateway archive handling
+        run: python3 infra/linux/test-mes-gateway.py
       - name: Verify deployment workflow boundary contract
         run: python3 infra/linux/test-mes-workflow-contract.py
 
