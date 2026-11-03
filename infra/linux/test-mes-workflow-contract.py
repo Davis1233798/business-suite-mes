@@ -95,7 +95,7 @@ if '"$root" == /srv/business-suite-mes' not in script or "MES_REQUIRE_ROOTLESS_D
 for value in ("status", "deploy", "MAX_ARCHIVE", "sha256", "runuser", 'PORT = "18095"', 'f"127.0.0.1:{PORT}"', "business-suite-mes/v1"):
     if value not in gateway:
         raise SystemExit(f"Forced-command gateway is missing validation: {value}")
-for value in ("INBOX = Path(\"/run/mes-deploy-inbox\")", "assert_root_inbox()", 'runtime("/usr/bin/mv", "--", archive_name, str(delivered))'):
+for value in ("INBOX = Path(\"/run/mes-deploy-inbox\")", "assert_root_inbox()", 'runtime("/usr/bin/install", "-m", "0600", "--", archive_name, str(delivered))'):
     if value not in gateway:
         raise SystemExit(f"Gateway staging handoff is missing {value}")
 if "mkstemp(prefix=f\"{sha}-\", suffix=\".tgz\", dir=STAGING)" in gateway:

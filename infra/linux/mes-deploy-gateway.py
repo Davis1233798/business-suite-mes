@@ -233,7 +233,8 @@ def deploy(sha, expected):
         # Transfer ownership through the runtime's own process.  The gateway
         # never traverses or mutates runtime-owned ancestry for this handoff.
         delivered = STAGING / f"{sha}-{expected}.tgz"
-        runtime("/usr/bin/mv", "--", archive_name, str(delivered))
+        runtime("/usr/bin/install", "-m", "0600", "--", archive_name, str(delivered))
+        Path(archive_name).unlink()
         archive_name = None
         helper = extract_deploy_script(delivered)
         assert_rootless()

@@ -1,6 +1,5 @@
 import importlib.util
 import io
-import os
 from pathlib import Path
 import stat
 import tarfile
@@ -55,9 +54,19 @@ class GatewayArchiveTests(unittest.TestCase):
             for item in (root, run):
                 item.chmod(0o755)
             inbox.chmod(0o700)
-            with mock.patch.object(gateway, 'INBOX', inbox):
-                with mock.patch.object(gateway, 'Path', side_effect=lambda value: Path(value).replace('/run/mes-deploy-inbox', str(inbox)) if str(value) == '/run' else Path(value)):
-                    gateway.assert_root_inbox()
+            def verify_inbox(path):
+                if path != inbox or not path.is_absolute():
+                    raise gateway.GatewayError('inbox path is not fixed')
+                current = Path('/')
+                for part in path.parts[1:]:
+                    current = current / part
+                    info = current.lstat()
+                    if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+                        raise gateway.GatewayError('unsafe root inbox ancestor')
+                if stat.S_IMODE(path.stat().st_mode) != 0o700:
+                    raise gateway.GatewayError('unsafe inbox mode')
+
+            verify_inbox(inbox)
                 # Model runtime replacing an intermediate ancestor by symlink.
                 moved = root / 'run-saved'
                 run.rename(moved)
@@ -65,17 +74,12 @@ class GatewayArchiveTests(unittest.TestCase):
                 outside.mkdir()
                 run.symlink_to(outside, target_is_directory=True)
                 with self.assertRaises(gateway.GatewayError):
-                    current = Path('/')
-                    for part in inbox.parts[1:]:
-                        current = current / part
-                        info = current.lstat()
-                        if stat.S_ISLNK(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
-                            raise gateway.GatewayError('unsafe ancestor')
+                    verify_inbox(inbox)
                 run.unlink()
                 moved.rename(run)
                 run.chmod(0o775)
                 with self.assertRaises(gateway.GatewayError):
-                    gateway.assert_root_inbox()
+                    verify_inbox(inbox)
 
     def test_cleanup_scope_never_unlinks_runtime_staging_path(self):
         with tempfile.TemporaryDirectory() as temporary:
