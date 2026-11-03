@@ -3,6 +3,8 @@ services:
     build:
       context: ../..
       dockerfile: infra/linux/Dockerfile.station
+      args:
+        SUITE_RELEASE_SHA: ${MES_RELEASE_SHA:?set MES_RELEASE_SHA}
     image: business-suite-mes-station:${MES_RELEASE_SHA:?set MES_RELEASE_SHA}
     restart: unless-stopped
     environment:

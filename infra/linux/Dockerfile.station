@@ -14,7 +14,8 @@ WORKDIR /source
 COPY backend/go.mod backend/go.sum ./
 RUN go mod download
 COPY backend/ ./
-RUN CGO_ENABLED=0 go build -trimpath -o /out/station-server .
+ARG SUITE_RELEASE_SHA=unknown
+RUN CGO_ENABLED=0 go build -trimpath -ldflags "-X main.releaseSHA=${SUITE_RELEASE_SHA}" -o /out/station-server .
 
 FROM debian:bookworm-slim
 WORKDIR /srv/station
