@@ -4,7 +4,7 @@
 
 此範本將本 repo 的 MES Go 工作站部署為專用 Linux 主機上的獨立 Compose 專案。該主機不得承載 portfolio 共用 stack 或其資料。正式站固定使用 Compose project `business-suite-mes`、service `mes-station`、volume `business-suite-mes-station-data` 及 loopback port `18095`。測試 root 僅能使用各自唯一的測試 project、volume 與 port。
 
-生產 Docker daemon 必須以 `mes-runtime` 帳號使用 rootless mode。GitHub SSH 帳號 `mes-deploy` 不得加入 `docker` 群組、不得讀取任何 Docker socket、不得取得互動 shell。root-owned SSH forced-command gateway 僅接受 `status` 和 `deploy <git-sha> <archive-sha256>`；收到 archive 後，gateway 將部署工作交給 `mes-runtime` 執行。這樣限制 CI key 的登入命令及其主機權限；rootless Docker 仍允許 CI 發布任意 MES 應用程式版本，因此專用 MES 主機仍是必要的信任邊界。不能把同機 `docker` 群組、Compose project 名稱或容器 label 當成 host isolation。
+生產 Docker daemon 必須以 `mes-runtime` 帳號使用 rootless mode。GitHub SSH 帳號 `mes-deploy` 不得加入 `docker` 群組、不得讀取任何 Docker socket、不得取得互動 shell。root-owned SSH `ForceCommand` gateway 僅接受 `status` 和 `deploy <git-sha> <archive-sha256>`；收到 archive 後，gateway 將部署工作交給 `mes-runtime` 執行。這樣限制 CI key 的登入命令及其主機權限；rootless Docker 仍允許 CI 發布任意 MES 應用程式版本，因此專用 MES 主機仍是必要的信任邊界。不能把同機 `docker` 群組、Compose project 名稱或容器 label 當成 host isolation。
 
 本次只部署此 repo 的 Go 工作站映像；它用自己的 SQLite volume。Vinext/Cloudflare Workers、D1 資料庫與既有展示資料不會自動遷移或共用。MES 根 hostname/DNS/Caddy 設定由維運人員另行審核；此部署器只在明確設定的 loopback port 提供 upstream，預設不建立公開入口。
 
