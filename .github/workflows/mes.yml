@@ -38,6 +38,23 @@ jobs:
           test "$(curl --silent -o /dev/null -w '%{http_code}' http://127.0.0.1:18095/erp/login)" = 404
       - name: Verify isolated deployment and rollback
         run: bash infra/linux/test-mes-deployment.sh
+      - name: Verify deployment workflow boundary contract
+        run: python3 infra/linux/test-mes-workflow-contract.py
+      - name: Package exact main source for deployment
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        run: |
+          set -euo pipefail
+          mkdir -p deploy-artifact
+          git archive --format=tar "$GITHUB_SHA" | gzip -n > deploy-artifact/mes-source.tgz
+          (cd deploy-artifact && sha256sum mes-source.tgz > mes-source.tgz.sha256)
+          printf '%s\n' "$GITHUB_SHA" > deploy-artifact/commit.sha
+      - uses: actions/upload-artifact@v4
+        if: github.event_name == 'push' && github.ref == 'refs/heads/main'
+        with:
+          name: mes-release-${{ github.sha }}
+          path: deploy-artifact/
+          retention-days: 1
+          if-no-files-found: error
       - name: Publish MES image on main
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
@@ -48,3 +65,74 @@ jobs:
           printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           docker tag mes-ci:${GITHUB_SHA} "$image:${GITHUB_SHA}"
           docker push "$image:${GITHUB_SHA}"
+
+  deploy:
+    needs: mes
+    if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.MES_DEPLOY_ENABLED == 'true'
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    environment: mes-production
+    concurrency:
+      group: mes-production-deploy
+      cancel-in-progress: false
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: ${{ github.sha }}
+      - uses: actions/download-artifact@v4
+        with:
+          name: mes-release-${{ github.sha }}
+          path: deploy-artifact
+      - name: Verify main head and artifact
+        env:
+          GH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+        run: |
+          set -euo pipefail
+          test "$(cat deploy-artifact/commit.sha)" = "$GITHUB_SHA"
+          gh api "repos/$GITHUB_REPOSITORY/commits/main" --jq .sha | grep -Fx "$GITHUB_SHA"
+          (cd deploy-artifact && sha256sum --check mes-source.tgz.sha256)
+      - name: Configure dedicated MES SSH access
+        env:
+          MES_DEPLOY_KEY: ${{ secrets.MES_DEPLOY_KEY }}
+          MES_DEPLOY_HOST_KEY: ${{ secrets.MES_DEPLOY_HOST_KEY }}
+          MES_DEPLOY_TARGET: ${{ secrets.MES_DEPLOY_TARGET }}
+        run: |
+          set -euo pipefail
+          [[ "$MES_DEPLOY_TARGET" =~ ^[a-z_][a-zA-Z0-9_-]*@([a-zA-Z0-9.-]+|\[[0-9a-fA-F:]+\])$ ]]
+          [[ "$MES_DEPLOY_KEY" == *"BEGIN"* && -n "$MES_DEPLOY_HOST_KEY" ]]
+          install -m 0700 -d "$HOME/.ssh"
+          printf '%s\n' "$MES_DEPLOY_KEY" > "$HOME/.ssh/mes_deploy_key"
+          printf '%s\n' "$MES_DEPLOY_HOST_KEY" > "$HOME/.ssh/known_hosts"
+          chmod 0600 "$HOME/.ssh/mes_deploy_key" "$HOME/.ssh/known_hosts"
+          cat > "$HOME/.ssh/config" <<'EOF'
+          Host mes-production
+            HostName ${MES_DEPLOY_TARGET#*@}
+            User ${MES_DEPLOY_TARGET%@*}
+            IdentityFile ~/.ssh/mes_deploy_key
+            IdentitiesOnly yes
+            StrictHostKeyChecking yes
+            UserKnownHostsFile ~/.ssh/known_hosts
+            BatchMode yes
+          EOF
+          python3 - <<'PY'
+          import os
+          from pathlib import Path
+          p = Path.home() / '.ssh/config'
+          value = p.read_text().replace('${MES_DEPLOY_TARGET#*@}', os.environ['MES_DEPLOY_TARGET'].split('@', 1)[1]).replace('${MES_DEPLOY_TARGET%@*}', os.environ['MES_DEPLOY_TARGET'].split('@', 1)[0])
+          p.write_text(value)
+          PY
+      - name: Upload and deploy isolated MES release
+        env:
+          MES_DEPLOY_TARGET: ${{ secrets.MES_DEPLOY_TARGET }}
+        run: |
+          set -euo pipefail
+          archive="/srv/business-suite-mes/staging/${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.tgz"
+          remote_script="/srv/business-suite-mes/staging/${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.sh"
+          digest="$(sha256sum deploy-artifact/mes-source.tgz | cut -d' ' -f1)"
+          script_digest="$(sha256sum infra/linux/deploy-mes-release.sh | cut -d' ' -f1)"
+          scp -F "$HOME/.ssh/config" deploy-artifact/mes-source.tgz "mes-production:$archive"
+          scp -F "$HOME/.ssh/config" infra/linux/deploy-mes-release.sh "mes-production:$remote_script"
+          ssh -F "$HOME/.ssh/config" -T mes-production \
+            "printf '%s  %s\n' '$script_digest' '$remote_script' | sha256sum --check --status && MES_DEPLOY_ROOT=/srv/business-suite-mes MES_DEPLOY_PROJECT=business-suite-mes MES_DEPLOY_DATA_VOLUME=business-suite-mes-station-data MES_DEPLOY_PORT=18095 bash '$remote_script' '$GITHUB_SHA' '$digest' '$archive' </dev/null"

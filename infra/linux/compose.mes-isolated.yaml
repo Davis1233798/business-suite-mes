@@ -22,4 +22,4 @@ services:
 
 volumes:
   mes-station-data:
-    name: ${MES_DEPLOY_DATA_VOLUME:-mes-mes-station-data}
+    name: ${MES_DEPLOY_DATA_VOLUME:-business-suite-mes-station-data}

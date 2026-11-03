@@ -3,8 +3,8 @@ set -Eeuo pipefail
 umask 077
 
 # Destructive to only its explicitly named disposable test volumes. Never run on production.
-project=mes-deploy-acceptance
-probe_project=mes-deploy-isolation-probe
+project="mes-deploy-acceptance-${RANDOM}-${RANDOM}"
+probe_project="mes-deploy-isolation-probe-${RANDOM}-${RANDOM}"
 deploy_project="mes-deploy-acceptance-${RANDOM}-${RANDOM}"
 sha=0123456789abcdef0123456789abcdef01234567
 port=${MES_TEST_PORT:-18096}
@@ -16,26 +16,49 @@ deploy_volume="mes-mes-station-acceptance-${RANDOM}-${RANDOM}"
 deploy_root="/tmp/mes-deploy-acceptance-${RANDOM}-${RANDOM}"
 deploy_port=${MES_TEST_DEPLOY_PORT:-18097}
 deploy_container="${deploy_project}-mes-station-1"
+test_container="${project}-mes-station-1"
 deploy_archive="$deploy_root/staging/$sha.tgz"
 rollback_sha=abcdef0123456789abcdef0123456789abcdef01
 bad_archive="$deploy_root/staging/$rollback_sha.tgz"
+test_project_pattern='^mes-deploy-acceptance-[0-9]+-[0-9]+$'
+probe_project_pattern='^mes-deploy-isolation-probe-[0-9]+-[0-9]+$'
+compose_volume_matches() {
+  local candidate_project=$1 candidate_file=$2 expected_volume=$3
+  [[ "$candidate_project" =~ $test_project_pattern || "$candidate_project" =~ $probe_project_pattern ]] || return 1
+  [[ -f "$candidate_file" && ! -L "$candidate_file" ]] || return 1
+  docker compose --project-name "$candidate_project" --file "$candidate_file" config --format json |
+    python3 -c 'import json,sys; d=json.load(sys.stdin); names={v.get("name") for v in d.get("volumes",{}).values()}; sys.exit(0 if names == {sys.argv[1]} else 1)' "$expected_volume"
+}
 cleanup() {
   local cleanup_failed=0
-  if [[ -f "$compose_file" ]] && ! docker compose --project-name "$project" --file "$compose_file" down --volumes --remove-orphans; then
-    echo "Cleanup failed for test project $project" >&2; cleanup_failed=1
+  if [[ -f "$compose_file" ]]; then
+    if ! compose_volume_matches "$project" "$compose_file" "$test_volume"; then
+      echo 'Refusing cleanup: test project or effective volume is not the expected isolated test identity' >&2; cleanup_failed=1
+    elif ! docker compose --project-name "$project" --file "$compose_file" down --volumes --remove-orphans; then
+      echo "Cleanup failed for test project $project" >&2; cleanup_failed=1
+    fi
   fi
-  if [[ -s "$probe_file" ]] && ! docker compose --project-name "$probe_project" --file "$probe_file" down --volumes --remove-orphans; then
-    echo "Cleanup failed for probe project $probe_project" >&2; cleanup_failed=1
+  if [[ -s "$probe_file" ]]; then
+    if ! compose_volume_matches "$probe_project" "$probe_file" "$probe_volume"; then
+      echo 'Refusing cleanup: probe project or effective volume is not the expected isolated test identity' >&2; cleanup_failed=1
+    elif ! docker compose --project-name "$probe_project" --file "$probe_file" down --volumes --remove-orphans; then
+      echo "Cleanup failed for probe project $probe_project" >&2; cleanup_failed=1
+    fi
   fi
   for volume in "$test_volume" "$probe_volume"; do
+    [[ "$volume" != business-suite-mes-station-data && "$volume" =~ ^(mes-mes-station-test-[0-9]+-[0-9]+|mes-isolation-probe-[0-9]+-[0-9]+)$ ]] || { echo "Refusing cleanup of non-test volume $volume" >&2; cleanup_failed=1; continue; }
     if docker volume inspect "$volume" >/dev/null 2>&1 && ! docker volume rm "$volume"; then
       echo "Cleanup failed for test volume $volume" >&2; cleanup_failed=1
     fi
   done
-  if [[ -f "$deploy_root/current/infra/linux/compose.mes-isolated.yaml" ]] && \
-      ! MES_RELEASE_SHA="${deploy_sha:-$sha}" MES_DEPLOY_ROOT="$deploy_root" MES_DEPLOY_PORT="$deploy_port" MES_DEPLOY_PROJECT="$deploy_project" MES_DEPLOY_DATA_VOLUME="$deploy_volume" \
+  if [[ -f "$deploy_root/current/infra/linux/compose.mes-isolated.yaml" ]]; then
+    if [[ ! "$deploy_project" =~ $test_project_pattern ]] || \
+        ! MES_RELEASE_SHA="${deploy_sha:-$sha}" MES_DEPLOY_PORT="$deploy_port" MES_DEPLOY_DATA_VOLUME="$deploy_volume" compose_volume_matches "$deploy_project" "$deploy_root/current/infra/linux/compose.mes-isolated.yaml" "$deploy_volume"; then
+      echo "Refusing cleanup: deployment project/volume is not the expected isolated test identity; preserving $deploy_root" >&2; cleanup_failed=1
+    elif ! MES_RELEASE_SHA="${deploy_sha:-$sha}" MES_DEPLOY_ROOT="$deploy_root" MES_DEPLOY_PORT="$deploy_port" MES_DEPLOY_PROJECT="$deploy_project" MES_DEPLOY_DATA_VOLUME="$deploy_volume" \
         docker compose --project-name "$deploy_project" --file "$deploy_root/current/infra/linux/compose.mes-isolated.yaml" down --volumes --remove-orphans; then
-    echo "Cleanup failed for deployment test project $deploy_project; preserving $deploy_root" >&2; cleanup_failed=1
+      echo "Cleanup failed for deployment test project $deploy_project; preserving $deploy_root" >&2; cleanup_failed=1
+    fi
   fi
   case "$deploy_root" in
     /tmp/mes-deploy-acceptance-[0-9]*-[0-9]*)
@@ -62,9 +85,12 @@ cleanup() {
 command -v docker >/dev/null || { echo 'docker is required' >&2; exit 2; }
 docker info >/dev/null || { echo 'Docker daemon is unavailable' >&2; exit 2; }
 command -v git >/dev/null || { echo 'git is required' >&2; exit 2; }
+[[ "$project" =~ $test_project_pattern ]] || { echo 'Test project is not uniquely namespaced' >&2; exit 2; }
+[[ "$probe_project" =~ $probe_project_pattern ]] || { echo 'Probe project is not uniquely namespaced' >&2; exit 2; }
 [[ -z "$(docker ps -aq --filter "label=com.docker.compose.project=${project}")" ]] || { echo "Test project already exists: $project" >&2; exit 2; }
 [[ -z "$(docker ps -aq --filter "label=com.docker.compose.project=${probe_project}")" ]] || { echo "Probe project already exists: $probe_project" >&2; exit 2; }
 [[ -z "$(docker ps -aq --filter "label=com.docker.compose.project=${deploy_project}")" ]] || { echo "Deploy project already exists: $deploy_project" >&2; exit 2; }
+[[ "$deploy_project" =~ ^mes-deploy-acceptance-[0-9]+-[0-9]+$ ]] || { echo 'Test deploy project must be uniquely namespaced' >&2; exit 2; }
 ! docker volume inspect "$test_volume" >/dev/null 2>&1 || { echo "Test volume already exists: $test_volume" >&2; exit 2; }
 ! docker volume inspect "$probe_volume" >/dev/null 2>&1 || { echo "Probe volume already exists: $probe_volume" >&2; exit 2; }
 ! docker volume inspect "$deploy_volume" >/dev/null 2>&1 || { echo "Deploy volume already exists: $deploy_volume" >&2; exit 2; }
@@ -78,13 +104,23 @@ command -v ss >/dev/null || { echo 'ss is required to verify the test port is fr
 ! ss -H -ltn "sport = :${port}" | grep -q . || { echo "Test port is already in use: $port" >&2; exit 2; }
 ! ss -H -ltn "sport = :${deploy_port}" | grep -q . || { echo "Deploy test port is already in use: $deploy_port" >&2; exit 2; }
 export MES_RELEASE_SHA="$sha" MES_DEPLOY_PORT="$port"
-sed "s|name: \${MES_DEPLOY_DATA_VOLUME:-mes-mes-station-data}|name: ${test_volume}|" infra/linux/compose.mes-isolated.yaml >"$compose_file"
+sed "s|name: \${MES_DEPLOY_DATA_VOLUME:-business-suite-mes-station-data}|name: ${test_volume}|" infra/linux/compose.mes-isolated.yaml >"$compose_file"
+
+# Simulate a stale/failed substitution and prove it is rejected before any up/down --volumes.
+guard_file="infra/linux/.compose-mes-guard-${RANDOM}-${RANDOM}.yaml"
+cp infra/linux/compose.mes-isolated.yaml "$guard_file"
+if compose_volume_matches "$project" "$guard_file" "$test_volume"; then
+  rm -f "$guard_file"
+  echo 'A missed volume substitution passed the compose isolation guard' >&2; exit 1
+fi
+rm -f "$guard_file"
+compose_volume_matches "$project" "$compose_file" "$test_volume" || { echo 'Generated Compose config does not resolve to the unique test volume' >&2; exit 1; }
 
 docker compose --project-name "$project" --file "$compose_file" config --quiet
 docker compose --project-name "$project" --file "$compose_file" up --build --detach --wait --wait-timeout 180
 health="http://127.0.0.1:${port}/api/health"
 curl --fail --silent --show-error --retry 15 --retry-connrefused --retry-delay 2 "$health" >/dev/null
-docker exec mes-deploy-acceptance-mes-station-1 test -s /srv/station/data/mes.sqlite
+docker exec "$test_container" test -s /srv/station/data/mes.sqlite
 
 # Probe namespace isolation using unique disposable Docker objects.
 cat >"$probe_file" <<EOF
@@ -98,6 +134,7 @@ volumes:
   probe-data:
     name: ${probe_volume}
 EOF
+compose_volume_matches "$probe_project" "$probe_file" "$probe_volume" || { echo 'Probe Compose config does not resolve to its unique test volume' >&2; exit 1; }
 docker volume create "$probe_volume" >/dev/null
 docker compose --project-name "$probe_project" --file "$probe_file" up --detach
 [[ "$(docker volume inspect --format '{{.Name}}' "$test_volume")" == "$test_volume" ]]
@@ -105,7 +142,7 @@ docker compose --project-name "$probe_project" --file "$probe_file" up --detach
 [[ "$(docker ps --filter "label=com.docker.compose.project=${project}" --filter status=running --format '{{.Names}}' | wc -l | tr -d ' ')" == 1 ]]
 docker compose --project-name "$project" --file "$compose_file" restart
 curl --fail --silent --show-error --retry 15 --retry-connrefused --retry-delay 2 "$health" >/dev/null
-docker exec mes-deploy-acceptance-mes-station-1 test -s /srv/station/data/mes.sqlite
+docker exec "$test_container" test -s /srv/station/data/mes.sqlite
 
 docker compose --project-name "$probe_project" --file "$probe_file" down --volumes --remove-orphans >/dev/null
 
@@ -130,6 +167,21 @@ fi
 deploy_sha=$(printf '%s' "$sha" | sha256sum | cut -c1-40)
 deploy_digest=$(sha256sum "$deploy_archive" | cut -d' ' -f1)
 if [[ -e "$deploy_root/current" || -e "$deploy_root/releases/$deploy_sha" ]]; then echo 'Unexpected test deploy state' >&2; exit 1; fi
+
+# A test root cannot select a production/shared project or volume name.
+if MES_DEPLOY_ROOT="$deploy_root" MES_DEPLOY_PORT="$deploy_port" MES_DEPLOY_PROJECT=business-suite MES_DEPLOY_DATA_VOLUME=business-suite-station-data \
+    bash infra/linux/deploy-mes-release.sh "$deploy_sha" "$deploy_digest" "$deploy_archive"; then
+  echo 'Deployment accepted a shared production project/volume from a test root' >&2; exit 1
+fi
+
+# An unfamiliar Compose service under the selected project must block deploy before build/up/down.
+docker run --detach --label "com.docker.compose.project=${deploy_project}" --label com.docker.compose.service=foreign-service alpine:3.21 sleep 300 >/dev/null
+if MES_DEPLOY_ROOT="$deploy_root" MES_DEPLOY_PORT="$deploy_port" MES_DEPLOY_PROJECT="$deploy_project" MES_DEPLOY_DATA_VOLUME="$deploy_volume" \
+    bash infra/linux/deploy-mes-release.sh "$deploy_sha" "$deploy_digest" "$deploy_archive"; then
+  docker rm -f "$(docker ps -aq --filter "label=com.docker.compose.project=${deploy_project}" --filter "label=com.docker.compose.service=foreign-service")" >/dev/null || true
+  echo 'Deployment accepted a foreign service in the MES Compose project' >&2; exit 1
+fi
+docker rm -f "$(docker ps -aq --filter "label=com.docker.compose.project=${deploy_project}" --filter "label=com.docker.compose.service=foreign-service")" >/dev/null
 
 for kind in symlink hardlink fifo traversal absolute; do
   case "$kind" in

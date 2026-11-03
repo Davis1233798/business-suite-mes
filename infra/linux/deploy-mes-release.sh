@@ -6,18 +6,29 @@ expected=${2:?archive SHA-256 required}
 archive=${3:?archive path required}
 root=${MES_DEPLOY_ROOT:-/srv/business-suite-mes}
 port=${MES_DEPLOY_PORT:-18095}
-project=${MES_DEPLOY_PROJECT:-mes}
-data_volume=${MES_DEPLOY_DATA_VOLUME:-mes-mes-station-data}
+project=${MES_DEPLOY_PROJECT:-business-suite-mes}
+data_volume=${MES_DEPLOY_DATA_VOLUME:-business-suite-mes-station-data}
 service=mes-station
 compose_file=infra/linux/compose.mes-isolated.yaml
 
 [[ "$sha" =~ ^[0-9a-f]{40}$ && "$expected" =~ ^[0-9a-f]{64}$ ]] || { echo 'Invalid git SHA or archive SHA-256' >&2; exit 2; }
 [[ "$root" == /srv/business-suite-mes || "$root" =~ ^/tmp/mes-deploy-acceptance-[0-9]+-[0-9]+$ ]] || { echo 'MES_DEPLOY_ROOT must be the production root or a uniquely named test root under /tmp' >&2; exit 2; }
+if [[ "$root" == /srv/business-suite-mes ]]; then
+  [[ "$project" == business-suite-mes && "$data_volume" == business-suite-mes-station-data && "$port" == 18095 ]] || { echo 'Production project, data volume, and port are fixed to the isolated MES namespace' >&2; exit 2; }
+  [[ -f "$root/.mes-deploy-owner" && ! -L "$root/.mes-deploy-owner" ]] || { echo 'Production root is not provisioned with an MES owner marker' >&2; exit 2; }
+  [[ "$(cat "$root/.mes-deploy-owner")" == business-suite-mes/v1 ]] || { echo 'Production root owner marker does not match this MES deployment' >&2; exit 2; }
+else
+  [[ "$project" =~ ^mes-deploy-acceptance-[0-9]+-[0-9]+$ && "$data_volume" =~ ^mes-mes-station-acceptance-[0-9]+-[0-9]+$ ]] || { echo 'Test roots require unique test-only project and data volume names' >&2; exit 2; }
+fi
 [[ "$project" =~ ^[a-z0-9][a-z0-9_-]{0,50}$ && "$data_volume" =~ ^[a-z0-9][a-z0-9_-]{0,100}$ ]] || { echo 'Invalid MES Compose project or volume name' >&2; exit 2; }
 [[ "$port" =~ ^[0-9]{1,5}$ ]] && ((port >= 1024 && port <= 65535)) || { echo 'MES_DEPLOY_PORT must be 1024..65535' >&2; exit 2; }
 [[ -f "$archive" && ! -L "$archive" ]] || { echo 'Archive must be a regular file, not a symlink' >&2; exit 2; }
 [[ ! -L "$root" ]] || { echo 'MES deployment root must not be a symlink' >&2; exit 2; }
-install -d -m 0750 "$root/releases" "$root/staging"
+if [[ "$root" == /srv/business-suite-mes ]]; then
+  [[ -d "$root" && ! -L "$root" && -d "$root/releases" && ! -L "$root/releases" && -d "$root/staging" && ! -L "$root/staging" ]] || { echo 'Production MES root and subdirectories must be provisioned before deployment' >&2; exit 2; }
+else
+  install -d -m 0750 "$root/releases" "$root/staging"
+fi
 [[ "$(realpath -e -- "$root")" == "$root" && ! -L "$root/releases" && ! -L "$root/staging" ]] || { echo 'MES deployment directories must resolve inside the fixed deployment root' >&2; exit 2; }
 [[ "$(realpath -e -- "$root/releases")" == "$root/releases" && "$(realpath -e -- "$root/staging")" == "$root/staging" ]] || { echo 'MES deployment directories must not escape the fixed deployment root' >&2; exit 2; }
 archive_real=$(realpath -e -- "$archive")
@@ -26,6 +37,12 @@ staging_real=$(realpath -e -- "$root/staging")
 exec 9>"$root/deploy.lock"
 flock -n 9 || { echo 'Another MES deployment is running' >&2; exit 1; }
 docker info >/dev/null
+
+if docker volume inspect "$data_volume" >/dev/null 2>&1; then
+  volume_project=$(docker volume inspect --format '{{ index .Labels "com.docker.compose.project" }}' "$data_volume")
+  volume_key=$(docker volume inspect --format '{{ index .Labels "com.docker.compose.volume" }}' "$data_volume")
+  [[ "$volume_project" == "$project" && "$volume_key" == mes-station-data ]] || { echo "Named volume $data_volume is not owned by the isolated MES Compose project" >&2; exit 1; }
+fi
 
 verified_archive="$root/.verified-$sha-$$.tgz"
 [[ ! -e "$verified_archive" && ! -L "$verified_archive" ]] || { echo 'Verified archive temporary path already exists' >&2; exit 1; }
@@ -66,6 +83,11 @@ else
   previous=''
 fi
 project_containers=$(docker ps -aq --filter "label=com.docker.compose.project=$project" --filter "label=com.docker.compose.service=$service")
+all_project_containers=$(docker ps -aq --filter "label=com.docker.compose.project=$project")
+for container in $all_project_containers; do
+  container_service=$(docker inspect --format '{{ index .Config.Labels "com.docker.compose.service" }}' "$container")
+  [[ "$container_service" == "$service" ]] || { echo "Compose project $project contains an unexpected service; refusing to mutate it" >&2; exit 1; }
+done
 previous_image=''
 if [[ -n "$project_containers" ]]; then
   [[ "$project_containers" != *$'\n'* ]] || { echo 'More than one MES service container exists; refusing ambiguous rollback' >&2; exit 1; }
