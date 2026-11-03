@@ -2,7 +2,7 @@
 
 ## 架構與程式邊界
 
-MES 專題的 GitHub Actions 應只建置、測試與封裝 MES 自身：Node 測試、TypeScript、MES Go 測試、React 建置與 MES 容器。不得要求其他系統 API，也不得沿用可重啟整套服務的 OCI 部署腳本。推送 main 可發布版本化 MES 容器；正式站自動部署需另有 MES 專屬環境、資料庫、憑證、health 與回滾驗收，尚未具備時不可宣稱已部署。
+MES 專題的 GitHub Actions 只建置、測試與封裝 MES 自身：Node 測試、TypeScript、MES Go 測試、React 建置與 MES 容器。不得要求其他系統 API，也不得沿用可重啟整套服務的 OCI 部署腳本。`main` push 保留 MES image 發布及受保護環境部署流程；部署需 `MES_DEPLOY_ENABLED=true` 且專用 Environment secrets 可用。部署 key 只呼叫固定 forced-command gateway，沒有 shell 或 Docker group 權限；gateway 要求專用 MES host 與 `mes-runtime` rootless Docker daemon，拒絕 rootful socket。這不代表 `docker` group 是隔離機制，也不把同一共享主機的 Docker project 當作 host boundary。
 
 ## 測試
 

@@ -1,0 +1,3 @@
+# The gateway accepts only status and deploy <sha> <digest>, then runs the
+# deployment helper as mes-runtime against its rootless daemon.
+mes-deploy ALL=(root) NOPASSWD: /usr/local/sbin/mes-deploy-gateway
