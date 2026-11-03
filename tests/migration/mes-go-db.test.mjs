@@ -16,17 +16,16 @@ function temporary(t) {
   return dir;
 }
 
-function makeSource(file, { badReporter = false, pendingOutbox = false } = {}) {
+function makeSharedSource(file, { badReporter = false, pendingOutbox = false, extraMesTable = false, extraVersion = false } = {}) {
   const db = new DatabaseSync(file);
-  for (const name of ['mes_initial.sql', 'mes_guards.sql', '0004_station_identity.sql', '0005_traffic_lab.sql']) {
+  // Match the shared Portfolio Go database bootstrap, including its actual
+  // common multi-station schema and migration ledger rather than the standalone
+  // MES repository's reduced `mes_initial.sql` source.
+  for (const name of ['0000_spicy_bromley.sql', '0001_transaction_guards.sql', '0002_dining_takeout.sql', '0003_mes_projection.sql', '0004_station_identity.sql', '0005_traffic_lab.sql']) {
     db.exec(fs.readFileSync(path.join(migrations, name), 'utf8'));
   }
-  db.exec(`CREATE TABLE suite_migrations(name TEXT PRIMARY KEY);
-    CREATE TABLE mes_projection_revisions(organization_id TEXT NOT NULL,work_order_id TEXT NOT NULL,revision INTEGER NOT NULL,PRIMARY KEY(organization_id,work_order_id));
-    CREATE TABLE mes_repository_schema(version INTEGER NOT NULL);
-    INSERT INTO mes_repository_schema VALUES(1);
-    CREATE TABLE erp_test_rows(id TEXT PRIMARY KEY, organization_id TEXT);
-    INSERT INTO erp_test_rows VALUES('erp-row','tenant-a');`);
+  if (extraVersion) db.exec("INSERT INTO suite_migrations(name) VALUES('0006_mes_finished_goods'),('0007_mes_finished_goods_resolutions')");
+  if (extraMesTable) db.exec('CREATE TABLE mes_finished_goods_batches(id TEXT PRIMARY KEY,organization_id TEXT NOT NULL,work_order_id TEXT NOT NULL);');
   db.prepare('INSERT INTO organizations(id,name,slug) VALUES(?,?,?)').run('tenant-a', 'Tenant A', 'tenant-a');
   db.prepare('INSERT INTO organizations(id,name,slug) VALUES(?,?,?)').run('tenant-b', 'Tenant B', 'tenant-b');
   db.prepare('INSERT INTO users(id,email,display_name) VALUES(?,?,?)').run('user-a', 'a@example.test', 'User A');
@@ -45,6 +44,9 @@ function makeSource(file, { badReporter = false, pendingOutbox = false } = {}) {
   db.prepare('INSERT INTO mes_production_reports(id,organization_id,work_order_id,operation_id,operator_id,good_quantity,scrap_quantity) VALUES(?,?,?,?,?,?,?)').run('report-a', 'tenant-a', 'wo-a', 'op-a', 'user-a', 2, 0);
   db.prepare('INSERT INTO audit_events(id,organization_id,actor_id,actor_role,action,entity_type,entity_id) VALUES(?,?,?,?,?,?,?)').run('audit-a', 'tenant-a', 'user-a', 'admin', 'mes.report', 'work_order', 'wo-a');
   db.prepare('INSERT INTO audit_events(id,organization_id,actor_id,actor_role,action,entity_type,entity_id) VALUES(?,?,?,?,?,?,?)').run('audit-erp', 'tenant-a', 'user-a', 'admin', 'STATION_GRANT', 'ACCOUNT', 'user-a');
+  // The source projection triggers correctly emit events during fixture setup;
+  // clear delivery state to model an explicitly reconciled cutover snapshot.
+  db.exec('DELETE FROM outbox_events');
   if (badReporter) db.prepare('INSERT INTO mes_downtime_events(id,organization_id,work_center_id,start_time,reason,reporter_id) VALUES(?,?,?,?,?,?)').run('down-a', 'tenant-a', 'center-a', '2026-01-01T00:00:00Z', 'test', 'missing-user');
   if (pendingOutbox) db.prepare('INSERT INTO outbox_events(id,organization_id,event_type,payload) VALUES(?,?,?,?)').run('event-a', 'tenant-a', 'mes.work-order.changed', '{}');
   db.close();
@@ -60,7 +62,7 @@ const sha256 = file => createHash('sha256').update(fs.readFileSync(file)).digest
 
 test('imports only selected MES tenant, preserves required identities and audit, resets delivery/session state', t => {
   const dir = temporary(t), source = path.join(dir, 'shared.sqlite'), destination = path.join(dir, 'mes.sqlite');
-  makeSource(source);
+  makeSharedSource(source);
   const before = sha256(source);
   const result = migrate(source, destination, ['tenant-a']);
   assert.equal(sha256(source), before);
@@ -74,7 +76,7 @@ test('imports only selected MES tenant, preserves required identities and audit,
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM station_grants WHERE site='erp'").get().n, 0);
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM station_sessions').get().n, 0);
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM audit_events').get().n, 1);
-  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM erp_test_rows').get().n, 0);
+  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM erp_items').get().n, 0);
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM outbox_events WHERE event_type LIKE 'mes.%'").get().n, 1, 'target projection is rebuilt from work orders');
   assert.equal(db.prepare('SELECT version FROM mes_repository_schema').get().version, 1);
   db.close();
@@ -82,7 +84,7 @@ test('imports only selected MES tenant, preserves required identities and audit,
 
 test('refuses existing destination without changing source or destination', t => {
   const dir = temporary(t), source = path.join(dir, 'shared.sqlite'), destination = path.join(dir, 'mes.sqlite');
-  makeSource(source); fs.writeFileSync(destination, 'preserve me');
+  makeSharedSource(source); fs.writeFileSync(destination, 'preserve me');
   const beforeSource = sha256(source), beforeDestination = sha256(destination);
   assert.throws(() => migrate(source, destination, ['tenant-a']));
   assert.equal(sha256(source), beforeSource);
@@ -91,7 +93,7 @@ test('refuses existing destination without changing source or destination', t =>
 
 test('fails closed on unresolved MES references and removes partial output', t => {
   const dir = temporary(t), source = path.join(dir, 'shared.sqlite'), destination = path.join(dir, 'mes.sqlite');
-  makeSource(source, { badReporter: true });
+  makeSharedSource(source, { badReporter: true });
   assert.throws(() => migrate(source, destination, ['tenant-a']), /unresolved/);
   assert.equal(fs.existsSync(destination), false);
   assert.equal(fs.readdirSync(dir).some(name => name.includes('.mes-target-') || name.includes('.mes-source-')), false);
@@ -99,23 +101,28 @@ test('fails closed on unresolved MES references and removes partial output', t =
 
 test('blocks a source with unresolved MES outbox rows', t => {
   const dir = temporary(t), source = path.join(dir, 'shared.sqlite'), destination = path.join(dir, 'mes.sqlite');
-  makeSource(source, { pendingOutbox: true });
+  makeSharedSource(source, { pendingOutbox: true });
   assert.throws(() => migrate(source, destination, ['tenant-a']), /outbox contains/);
   assert.equal(fs.existsSync(destination), false);
 });
 
 test('refuses a retained identity that also belongs to an unselected tenant', t => {
   const dir = temporary(t), source = path.join(dir, 'shared.sqlite'), destination = path.join(dir, 'mes.sqlite');
-  makeSource(source); addForeignMembership(source);
+  makeSharedSource(source); addForeignMembership(source);
   assert.throws(() => migrate(source, destination, ['tenant-a']), /unselected tenant/);
   assert.equal(fs.existsSync(destination), false);
 });
 
-test('refuses an unsupported source marker before creating any output', t => {
+test('refuses an unsupported shared migration ledger before creating any output', t => {
   const dir = temporary(t), source = path.join(dir, 'shared.sqlite'), destination = path.join(dir, 'mes.sqlite');
-  makeSource(source);
-  const db = new DatabaseSync(source);
-  db.prepare('UPDATE mes_repository_schema SET version=9').run(); db.close();
-  assert.throws(() => migrate(source, destination, ['tenant-a']), /Unsupported or unmarked/);
+  makeSharedSource(source, { extraVersion: true });
+  assert.throws(() => migrate(source, destination, ['tenant-a']), /Unsupported shared Go migrations/);
+  assert.equal(fs.existsSync(destination), false);
+});
+
+test('refuses newer shared profolio MES tables not present in target schema', t => {
+  const dir = temporary(t), source = path.join(dir, 'shared.sqlite'), destination = path.join(dir, 'mes.sqlite');
+  makeSharedSource(source, { extraMesTable: true });
+  assert.throws(() => migrate(source, destination, ['tenant-a']), /Unknown MES tables/);
   assert.equal(fs.existsSync(destination), false);
 });

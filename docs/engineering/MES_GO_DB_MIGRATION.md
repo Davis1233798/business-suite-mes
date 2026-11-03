@@ -8,12 +8,14 @@ execution evidence.
 ## Source and target boundary
 
 The source is the shared Go SQLite database from the Portfolio repository. It
-must be opened read-only and snapshotted with SQLite's backup API (or
-`VACUUM INTO`) while all writers are stopped. The original file is never
-modified. The output must be a new, exclusively-created path. Never overwrite,
-rename over, or initialize a nonempty destination. The destination gets the
-MES repository's own migrations and `mes_repository_schema` marker, not a
-marker copied from the source.
+is recognized through `suite_migrations` containing exactly the supported
+`0003_mes_projection` marker; the shared Go DB does not use the standalone MES
+repository's `mes_repository_schema` marker. It must be opened read-only and
+snapshotted with SQLite `VACUUM INTO` while all writers are stopped. The
+original file is never modified. The output must be a new, exclusively-created
+path. Never overwrite, rename over, or initialize a nonempty destination. The
+destination gets this MES repository's migrations and `mes_repository_schema`
+marker, not a marker copied from the source.
 
 ## Explicit table contract
 
@@ -25,9 +27,13 @@ marker copied from the source.
 | Rebuild | `outbox_events`, `suite_migrations`, `mes_projection_revisions` | Any source outbox row blocks migration. MES projection schema/backfill is created from imported work orders; source delivery state is not copied. |
 | Exclude | Every other table, including all `erp_*`, `pos_*`, `crm_*`, `dining_*`, and `shop_*` tables | Never copy. Resolve all source outbox rows first; silently dropping another station's events could lose work. |
 
-The importer pins a reviewed list against the repository migrations. Existing
-Go migrations define few foreign keys for MES business tables, so application-
-level tenant/reference checks supplement `PRAGMA foreign_key_check`.
+The importer pins a reviewed list against the repository migrations. It refuses
+shared DB ledgers with migrations beyond the supported projection-only version
+and refuses unknown `mes_*` tables. The latest profolio main has added MES
+finished-goods and MES/ERP integration tables/migrations; it therefore fails
+closed until the target repo adopts and validates those schemas. Existing Go
+migrations define few foreign keys for MES business tables, so application-level
+tenant/reference checks supplement `PRAGMA foreign_key_check`.
 
 ## Required importer properties
 
@@ -69,7 +75,10 @@ unresolved references, unknown MES tables, unsupported markers, and identities
 also belonging to unselected tenants cause refusal. Target schema is bootstrapped
 from this repo's Go migrations without demo seeds.
 
-Tests use only generated disposable databases. Current synthetic cases cover
+Tests use only generated disposable databases bootstrapped from the same
+shared multi-station Go base migrations (`0000` through `0005`) as Portfolio,
+with the projection ledger rather than an independent-MES marker. Current
+synthetic cases cover
 tenant filtering, account hashes, MES-only grants/audit, session reset, rebuilt
 projection events, non-MES exclusion, existing destination protection,
 unresolved references, outbox refusal, cross-tenant identity refusal, and

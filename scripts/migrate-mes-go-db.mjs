@@ -80,10 +80,13 @@ function manifestSnapshot(db) {
 function assertSource(source) {
   assertIntegrity(source, 'Source');
   const names = tables(source);
-  const marker = names.has('mes_repository_schema')
-    ? source.prepare('SELECT version FROM mes_repository_schema').all()
-    : [];
-  if (!names.has('organizations') || marker.length !== 1 || marker[0].version !== 1) throw new Error('Unsupported or unmarked MES Go source database');
+  // The shared Portfolio Go database is identified by its projection migration
+  // ledger, not by the independent MES repository marker.
+  if (!names.has('organizations') || !names.has('suite_migrations')) throw new Error('Unsupported shared Go source database: missing organizations or suite_migrations');
+  const applied = source.prepare('SELECT name FROM suite_migrations ORDER BY name').all().map(row => row.name);
+  if (!applied.includes('0003_mes_projection')) throw new Error('Unsupported shared Go source version: 0003_mes_projection is absent');
+  const unknownVersions = applied.filter(name => name !== '0003_mes_projection');
+  if (unknownVersions.length) throw new Error(`Unsupported shared Go migrations: ${unknownVersions.join(', ')}`);
   for (const table of COPY_TABLES) if (!names.has(table)) throw new Error(`Required source table missing: ${table}`);
   for (const table of RESET_TABLES) if (!names.has(table)) throw new Error(`Required source table missing: ${table}`);
   for (const table of REBUILT_TABLES) if (!names.has(table)) throw new Error(`Required source table missing: ${table}`);
