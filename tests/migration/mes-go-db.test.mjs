@@ -145,7 +145,7 @@ test('upgrades the known early finished-goods disposition shape and preserves it
   migrate(source, destination, ['tenant-a']);
   const db = new DatabaseSync(destination, { readOnly: true });
   const row = db.prepare("SELECT id,quality_check_id,reinspection_after,reason FROM mes_finished_goods_quality_dispositions WHERE id='disposition-a'").get();
-  assert.deepEqual(row, {id:'disposition-a',quality_check_id:null,reinspection_after:0,reason:''});
+  assert.deepEqual({...row}, {id:'disposition-a',quality_check_id:null,reinspection_after:0,reason:''});
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM mes_finished_goods_quality_dispositions').get().n, 2);
   db.close();
 });
