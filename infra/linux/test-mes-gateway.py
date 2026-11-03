@@ -73,6 +73,30 @@ class GatewayArchiveTests(unittest.TestCase):
             with self.assertRaises(gateway.GatewayError):
                 gateway.validate_root_inbox(inbox, run, os.getuid(), os.getgid())
 
+    def test_gateway_lock_rejects_preplaced_symlink_and_wrong_owner(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            inbox = Path(temporary) / 'mes-deploy-inbox'
+            inbox.mkdir(mode=0o710)
+            lock = inbox / 'gateway.lock'
+            target = Path(temporary) / 'outside'
+            target.write_text('outside')
+            lock.symlink_to(target)
+            with mock.patch.object(gateway, 'INBOX', inbox), self.assertRaises(OSError):
+                gateway.open_deploy_lock()
+
+            lock.unlink()
+            fd, _ = tempfile.mkstemp(dir=inbox)
+            os.close(fd)
+            try:
+                fake_stat = types.SimpleNamespace(st_mode=stat.S_IFREG | 0o600, st_uid=os.getuid() + 1)
+                with mock.patch.object(gateway, 'INBOX', inbox), mock.patch.object(gateway.os, 'fstat', return_value=fake_stat), self.assertRaises(gateway.GatewayError):
+                    gateway.open_deploy_lock()
+                bad_mode = types.SimpleNamespace(st_mode=stat.S_IFREG | 0o640, st_uid=0)
+                with mock.patch.object(gateway, 'INBOX', inbox), mock.patch.object(gateway.os, 'fstat', return_value=bad_mode), self.assertRaises(gateway.GatewayError):
+                    gateway.open_deploy_lock()
+            finally:
+                (inbox / 'gateway.lock').unlink(missing_ok=True)
+
     def test_cleanup_scope_never_unlinks_runtime_staging_path(self):
         with tempfile.TemporaryDirectory() as temporary:
             root = Path(temporary)
@@ -143,7 +167,7 @@ class GatewayArchiveTests(unittest.TestCase):
             return types.SimpleNamespace(returncode=0)
 
         def fixture_open(path, *args, **kwargs):
-            if str(path) == '/run/lock/mes-deploy-gateway.lock':
+            if str(path) == str(inbox / 'gateway.lock'):
                 return lock_fd
             return original_open(path, *args, **kwargs)
 
@@ -165,6 +189,7 @@ class GatewayArchiveTests(unittest.TestCase):
             mock.patch.object(gateway, 'runtime_context', return_value=(account, {})),
             mock.patch.object(gateway.pwd, 'getpwnam', return_value=account),
             mock.patch.object(gateway.os, 'open', side_effect=fixture_open),
+            mock.patch.object(gateway.os, 'fstat', return_value=types.SimpleNamespace(st_mode=stat.S_IFREG | 0o600, st_uid=0)),
             mock.patch.object(gateway.os, 'fchown', side_effect=fchown),
             mock.patch.object(gateway.os, 'fchmod'),
             mock.patch.object(gateway.fcntl, 'flock'),

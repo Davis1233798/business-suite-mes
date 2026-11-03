@@ -125,6 +125,17 @@ def assert_root_inbox():
     validate_root_inbox(INBOX, Path("/run"), 0, grp.getgrnam("mes-runtime").gr_gid)
 
 
+def open_deploy_lock():
+    lock_path = INBOX / "gateway.lock"
+    flags = os.O_CREAT | os.O_RDWR | os.O_NOFOLLOW | os.O_CLOEXEC
+    fd = os.open(lock_path, flags, 0o600)
+    info = os.fstat(fd)
+    if not stat.S_ISREG(info.st_mode) or info.st_uid != 0 or stat.S_IMODE(info.st_mode) != 0o600:
+        os.close(fd)
+        raise GatewayError("MES gateway lock must be a root-owned regular file with mode 0600")
+    return fd
+
+
 def check_status():
     assert_host_boundary()
     assert_rootless()
@@ -208,7 +219,7 @@ def deploy(sha, expected):
         raise GatewayError("invalid commit or archive digest")
     assert_host_boundary()
     assert_rootless()
-    lock_fd = os.open("/run/lock/mes-deploy-gateway.lock", os.O_CREAT | os.O_RDWR, 0o600)
+    lock_fd = open_deploy_lock()
     try:
         fcntl.flock(lock_fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
     except BlockingIOError as exc:
