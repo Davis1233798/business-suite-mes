@@ -46,7 +46,7 @@ jobs:
           set -euo pipefail
           mkdir -p deploy-artifact
           git archive --format=tar "$GITHUB_SHA" | gzip -n > deploy-artifact/mes-source.tgz
-          sha256sum deploy-artifact/mes-source.tgz > deploy-artifact/mes-source.tgz.sha256
+          (cd deploy-artifact && sha256sum mes-source.tgz > mes-source.tgz.sha256)
           printf '%s\n' "$GITHUB_SHA" > deploy-artifact/commit.sha
       - uses: actions/upload-artifact@v4
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
