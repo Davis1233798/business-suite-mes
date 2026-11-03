@@ -82,7 +82,7 @@ test('imports only selected MES tenant, preserves required identities and audit,
   const db = new DatabaseSync(destination, { readOnly: true });
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM organizations').get().n, 1);
   assert.equal(db.prepare('SELECT id FROM organizations').get().id, 'tenant-a');
-  assert.equal(db.prepare('SELECT COUNT(*) AS n FROM mes_work_orders WHERE organization_id="tenant-a"').get().n, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM mes_work_orders WHERE organization_id='tenant-a'").get().n, 1);
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM users').get().n, 1);
   assert.equal(db.prepare('SELECT password_hash FROM station_accounts WHERE user_id="user-a"').get().password_hash, 'pbkdf2-sha256$test$hash');
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM station_grants WHERE site='erp'").get().n, 0);
@@ -112,7 +112,7 @@ test('refuses existing destination without changing source or destination', t =>
 test('fails closed on unresolved MES references and removes partial output', t => {
   const dir = temporary(t), source = path.join(dir, 'shared.sqlite'), destination = path.join(dir, 'mes.sqlite');
   makeSharedSource(source, { badReporter: true });
-  assert.throws(() => migrate(source, destination, ['tenant-a']), /unresolved/);
+  assert.throws(() => migrate(source, destination, ['tenant-a']), /unresolved/i);
   assert.equal(fs.existsSync(destination), false);
   assert.equal(fs.readdirSync(dir).some(name => name.startsWith('.mes-migration-')), false);
 });
