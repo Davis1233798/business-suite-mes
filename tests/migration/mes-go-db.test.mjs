@@ -84,7 +84,7 @@ test('imports only selected MES tenant, preserves required identities and audit,
   assert.equal(db.prepare('SELECT id FROM organizations').get().id, 'tenant-a');
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM mes_work_orders WHERE organization_id='tenant-a'").get().n, 1);
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM users').get().n, 1);
-  assert.equal(db.prepare('SELECT password_hash FROM station_accounts WHERE user_id="user-a"').get().password_hash, 'pbkdf2-sha256$test$hash');
+  assert.equal(db.prepare("SELECT password_hash FROM station_accounts WHERE user_id='user-a'").get().password_hash, 'pbkdf2-sha256$test$hash');
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM station_grants WHERE site='erp'").get().n, 0);
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM station_sessions').get().n, 0);
   assert.equal(db.prepare('SELECT COUNT(*) AS n FROM audit_events').get().n, 1);
