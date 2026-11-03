@@ -7,7 +7,7 @@ import { generateCsv } from "./export-csv";
 // Identity, authorization, audit history and replay caches are intentionally not
 // restorable business data. Audit history survives restoring a snapshot.
 const excluded = new Set(["organizations", "users", "memberships", "audit_events", "idempotency_keys", "outbox_events", "demo_seed_states"]);
-const tables = Object.values(schema).filter(table => "organizationId" in getTableColumns(table) && !excluded.has(getTableName(table)));
+const tables = Object.values(schema).filter(table => "organizationId" in getTableColumns(table) && getTableName(table).startsWith("mes_") && !excluded.has(getTableName(table)));
 const byName = new Map<string, (typeof tables)[number]>(tables.map(table => [getTableName(table), table]));
 export interface TenantBackup { format: "business-suite/v1"; organizationId: string; exportedAt: string; tables: Record<string, Record<string, any>[]>; }
 
@@ -20,11 +20,7 @@ export async function exportWorkspace(context: TenantContext): Promise<TenantBac
 
 const referenceTargets: Record<string, string> = {
   mes_productId: "mes_products", mes_bomVersionId: "mes_bom_versions", mes_workOrderId: "mes_work_orders", mes_workCenterId: "mes_work_centers", mes_materialLotId: "mes_material_lots", mes_operationId: "mes_operations", mes_reportId: "mes_production_reports",
-  erp_itemId: "erp_items", erp_warehouseId: "erp_warehouses", erp_supplierId: "erp_suppliers", erp_customerId: "erp_customers", erp_poId: "erp_purchase_orders", erp_receiptId: "erp_receipts", erp_soId: "erp_sales_orders", erp_shipmentId: "erp_shipments", erp_invoiceId: "erp_invoices", erp_journalId: "erp_journal_entries",
-  pos_storeId: "pos_stores", pos_registerId: "pos_registers", pos_shiftId: "pos_shifts", pos_saleId: "pos_sales", pos_originalSaleId: "pos_sales", pos_itemId: "pos_catalog_items", pos_saleLineId: "pos_sale_lines", pos_refundId: "pos_refunds",
-  crm_accountId: "crm_accounts", crm_contactId: "crm_contacts", crm_primaryContactId: "crm_contacts", crm_stageId: "crm_stages", crm_opportunityId: "crm_opportunities", crm_quoteId: "crm_quotes", crm_convertedAccountId: "crm_accounts", crm_convertedContactId: "crm_contacts", crm_convertedOpportunityId: "crm_opportunities",
-  dining_locationId: "dining_locations", dining_tableId: "dining_tables", dining_groupId: "dining_modifier_groups", dining_sessionId: "dining_table_sessions", dining_orderId: "dining_orders", dining_orderItemId: "dining_order_items", dining_menuItemId: "dining_menu_items", dining_billId: "dining_bills",
-  shop_categoryId: "shop_categories", shop_productId: "shop_products", shop_variantId: "shop_variants", shop_cartId: "shop_carts", shop_orderId: "shop_orders", shop_orderItemId: "shop_order_items",
+
 };
 
 export function validateWorkspaceBackup(context: TenantContext, value: unknown): TenantBackup {
