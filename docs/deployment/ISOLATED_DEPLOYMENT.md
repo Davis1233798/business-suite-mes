@@ -29,7 +29,7 @@ Compose project、volume 與 loopback port 在正式環境不可覆寫；部署�
 - 專用 Linux 主機已安裝 rootless Docker Engine/Compose v2、Bash、Python 3、`flock`、`sha256sum`、`tar`、`curl`。
 - 維運人員需建立互相隔離的 `mes-deploy` 與 `mes-runtime` 帳號。`mes-runtime` 擁有自己的 rootless Docker daemon、MES project 和資料；`mes-deploy` 沒有 Docker 權限、沒有 runtime home/data 存取權，也不能互動登入。不要將任何帳號加入 rootful `docker` 群組。
 - 將 `infra/linux/mes-deploy-gateway.py` 安裝為 root-owned、不可由兩個 service account 修改的 `/usr/local/sbin/mes-deploy-gateway`；`infra/linux/mes-deploy.sudoers` 僅允許 `mes-deploy` 以 root 執行這支固定檔案。將 `infra/linux/sshd-mes-deploy.conf` 的 `Match User mes-deploy` 設定放在 sshd 有效設定的最後，並停用 TTY、TCP/stream-local/agent forwarding、X11、密碼和 user rc。以 `sshd -T -C user=mes-deploy,host=<host>,addr=<runner-ip>` 核對 effective policy。Gateway 只允許 `status`、`deploy <sha> <digest>`，且只以 `runuser -u mes-runtime` 啟動受控發布程序；不得接受任意命令、路徑、Compose project、volume 或 port。
-- 維運人員預先建立 `/srv/business-suite-mes`、`releases/`、`staging/` 及內容恰為 `business-suite-mes/v1` 的 `.mes-deploy-owner` marker。`/srv/business-suite-mes` 與 `staging/` 由 `mes-runtime` 私有擁有；runtime 負責 staging archive 的存取與清理。Root gateway 的短期 inbox 位於 `/run/mes-deploy-inbox`，權限為 `root:root`、`0700`；gateway 先在這個 root-controlled 路徑寫完並驗證上傳，再以 runtime 身分將檔案移入 staging。部署 helper 從已校驗的 main archive 解出後，以 `mes-runtime` 身分執行。資料 volume 由 `mes-runtime` 的 rootless daemon 管理；不得指向共用 Docker socket 或任何共享資料目錄。
+- 維運人員預先建立 `/srv/business-suite-mes`、`releases/`、`staging/` 及內容恰為 `business-suite-mes/v1` 的 `.mes-deploy-owner` marker。`/srv/business-suite-mes` 與 `staging/` 由 `mes-runtime` 私有擁有；runtime 負責 staging archive 的存取與清理。Root gateway 的短期 inbox 位於 `/run/mes-deploy-inbox`，權限為 `root:mes-runtime`、`0710`，只提供 runtime 目錄穿越與讀取 root 建立之交付檔案的權限，不允許 runtime 改動 inbox；gateway 先在這個 root-controlled 路徑寫完並驗證上傳，再以 runtime 身分將檔案複製入 staging。部署 helper 從已校驗的 main archive 解出後，以 `mes-runtime` 身分執行。資料 volume 由 `mes-runtime` 的 rootless daemon 管理；不得指向共用 Docker socket 或任何共享資料目錄。
 - 專用 GitHub Environment `mes-production` 提供專屬 `MES_DEPLOY_TARGET`、`MES_DEPLOY_KEY`、經帶外核對的 `MES_DEPLOY_HOST_KEY`，及 repository variable `MES_DEPLOY_ENABLED=true`。不得重用中央 `OCI_*` secrets。私鑰/憑證值不得傳給部署腳本參數或輸出到日誌。
 - staging archive 來源只允許受信任 `main` workflow；確認 GitHub Environment 核准者、主機網路政策與 SSH host key 後，才可設定啟用變數。
 - 首次部署前人工確認 release root owner marker、磁碟空間、Docker project/volume 名稱沒有既有衝突，以及 loopback port 空閒。部署器不會清理共享資源或自動建立 owner marker。
@@ -40,7 +40,7 @@ Compose project、volume 與 loopback port 在正式環境不可覆寫；部署�
 
 ```bash
 sudo install -d -m 0750 -o mes-runtime -g mes-runtime /srv/business-suite-mes /srv/business-suite-mes/releases /srv/business-suite-mes/staging
-sudo install -d -m 0700 -o root -g root /run/mes-deploy-inbox
+sudo install -d -m 0710 -o root -g mes-runtime /run/mes-deploy-inbox
 printf 'business-suite-mes/v1\n' | sudo tee /srv/business-suite-mes/.mes-deploy-owner
 sudo chmod 0444 /srv/business-suite-mes/.mes-deploy-owner
 sudo -u mes-runtime env XDG_RUNTIME_DIR=/run/user/"$(id -u mes-runtime)" DOCKER_HOST=unix:///run/user/"$(id -u mes-runtime)"/docker.sock docker info --format '{{json .SecurityOptions}}'

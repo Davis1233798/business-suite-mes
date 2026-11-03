@@ -33,7 +33,7 @@ gateway=/usr/local/sbin/mes-deploy-gateway
 root=/srv/business-suite-mes
 [[ -d "$root" && ! -L "$root" && $(stat -c '%U:%G:%a' "$root") == mes-runtime:mes-runtime:750 ]] || fail 'MES release root must be a mes-runtime-owned private directory'
 [[ -d "$root/staging" && ! -L "$root/staging" && $(stat -c '%U:%G:%a' "$root/staging") == mes-runtime:mes-runtime:750 ]] || fail 'MES staging directory must be owned privately by mes-runtime'
-[[ -d /run/mes-deploy-inbox && ! -L /run/mes-deploy-inbox && $(stat -c '%U:%G:%a' /run/mes-deploy-inbox) == root:root:700 ]] || fail 'gateway inbox must be root-owned under root-controlled /run'
+[[ -d /run/mes-deploy-inbox && ! -L /run/mes-deploy-inbox && $(stat -c '%U:%G:%a' /run/mes-deploy-inbox) == root:mes-runtime:710 ]] || fail 'gateway inbox must be root-owned and traversable by mes-runtime under root-controlled /run'
 [[ -f "$root/.mes-deploy-owner" && ! -L "$root/.mes-deploy-owner" && $(stat -c '%U:%a' "$root/.mes-deploy-owner") == root:444 && $(cat "$root/.mes-deploy-owner") == business-suite-mes/v1 ]] || fail 'MES owner marker is missing or invalid'
 
 runtime_uid=$(id -u mes-runtime)

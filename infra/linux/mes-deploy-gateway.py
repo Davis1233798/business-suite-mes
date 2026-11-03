@@ -104,20 +104,25 @@ def assert_host_boundary():
     assert_root_inbox()
 
 
-def assert_root_inbox():
-    """Require a root-private inbox whose full path has no runtime-writable ancestor."""
-    inbox = Path(INBOX)
-    if not inbox.is_absolute() or inbox.name != "mes-deploy-inbox" or inbox.parent != Path("/run"):
+def validate_root_inbox(inbox, anchor, owner_uid, group_gid):
+    """Require a private inbox and root-controlled ancestry from a trusted anchor."""
+    inbox = Path(inbox)
+    anchor = Path(anchor)
+    if not inbox.is_absolute() or inbox.name != "mes-deploy-inbox" or inbox.parent != anchor:
         raise GatewayError("MES root inbox path is not fixed")
-    current = Path("/")
-    for part in inbox.parts[1:]:
-        current = current / part
-        info = current.lstat()
-        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+    current = anchor
+    for candidate in (anchor, inbox):
+        info = candidate.lstat()
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode) or info.st_uid != owner_uid or info.st_mode & 0o022:
             raise GatewayError("MES root inbox has an unsafe or non-root-controlled ancestor")
     info = inbox.stat()
-    if stat.S_IMODE(info.st_mode) != 0o700:
-        raise GatewayError("MES root inbox must be root-owned mode 0700")
+    if info.st_gid != group_gid or stat.S_IMODE(info.st_mode) != 0o710:
+        raise GatewayError("MES root inbox must be root-owned mode 0710 for runtime read access")
+
+
+def assert_root_inbox():
+    """Require a root-private inbox whose full path has no runtime-writable ancestor."""
+    validate_root_inbox(INBOX, Path("/run"), 0, grp.getgrnam("mes-runtime").gr_gid)
 
 
 def check_status():
