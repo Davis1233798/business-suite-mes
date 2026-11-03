@@ -5,6 +5,7 @@ workflow = Path(".github/workflows/mes.yml").read_text()
 deploy = workflow.split("\n  deploy:\n", 1)[1]
 script = Path("infra/linux/deploy-mes-release.sh").read_text()
 docs = Path("docs/deployment/ISOLATED_DEPLOYMENT.md").read_text()
+acceptance = Path("infra/linux/test-mes-deployment.sh").read_text()
 
 required = {
     "main-only deployment": "github.ref == 'refs/heads/main'",
@@ -41,5 +42,9 @@ for value in ("business-suite-mes/v1", "business-suite-mes-station-data", "MES_D
 for value in ("Production project, data volume, and port are fixed", "unexpected service", "Test roots require unique test-only"):
     if value not in script:
         raise SystemExit(f"Deployment script is missing boundary enforcement: {value}")
+
+for value in ("compose_volume_matches", "A missed volume substitution passed the compose isolation guard", "Refusing cleanup of non-test volume", "Refusing cleanup: test project or effective volume"):
+    if value not in acceptance:
+        raise SystemExit(f"Remote acceptance is missing test-volume safety coverage: {value}")
 
 print("MES deployment workflow and isolation contract passed.")
