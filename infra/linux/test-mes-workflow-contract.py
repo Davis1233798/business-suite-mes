@@ -50,11 +50,13 @@ required = {
     "fixed MES project": "MES_DEPLOY_PROJECT=business-suite-mes",
     "fixed MES volume": "MES_DEPLOY_DATA_VOLUME=business-suite-mes-station-data",
     "fixed loopback port": "MES_DEPLOY_PORT=18095",
-    "checksum generated relative to artifact directory": "(cd deploy-artifact && sha256sum mes-source.tgz > mes-source.tgz.sha256)",
 }
 for label, value in required.items():
     if value not in deploy:
         raise SystemExit(f"Workflow deploy job is missing {label}: {value}")
+
+if "(cd deploy-artifact && sha256sum mes-source.tgz > mes-source.tgz.sha256)" not in workflow:
+    raise SystemExit("Workflow must create the artifact checksum relative to its upload directory")
 
 for forbidden in ("OCI_DEPLOY_KEY", "/srv/business-suite/current", "business-suite-station-data", "ssh-keyscan"):
     if forbidden in deploy:
