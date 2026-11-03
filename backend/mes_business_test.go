@@ -36,6 +36,7 @@ func TestMESImportedRetryReplay(t *testing.T) {
 	}
 	w := httptest.NewRecorder()
 	r := httptest.NewRequest(http.MethodPost, path, mustJSONReader(t, input))
+	r.Header.Set("Content-Type", "application/json")
 	a.mesBusiness(w, r, identity, grant)
 	if w.Code != http.StatusOK {
 		t.Fatalf("same-key replay status=%d body=%s", w.Code, w.Body.String())
@@ -52,6 +53,7 @@ func TestMESImportedRetryReplay(t *testing.T) {
 	input["goodQuantity"] = 3
 	w = httptest.NewRecorder()
 	r = httptest.NewRequest(http.MethodPost, path, mustJSONReader(t, input))
+	r.Header.Set("Content-Type", "application/json")
 	a.mesBusiness(w, r, identity, grant)
 	if w.Code != http.StatusConflict {
 		t.Fatalf("changed-payload replay status=%d body=%s", w.Code, w.Body.String())
