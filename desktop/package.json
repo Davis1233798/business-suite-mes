@@ -3,16 +3,17 @@
   "version": "0.1.0",
   "private": true,
   "main": "main.cjs",
-  "description": "Business Suite Go + React desktop workspace",
+  "description": "ForgeFlow MES Go + React desktop workspace",
   "author": "Business Suite",
   "build": {
-    "appId": "org.blockchen.businesssuite",
-    "productName": "Business Suite",
+    "appId": "org.blockchen.forgeflow.mes",
+    "productName": "ForgeFlow MES",
     "directories": {
       "output": "../outputs/desktop"
     },
     "files": [
       "main.cjs",
+      "paths.cjs",
       "package.json"
     ],
     "extraResources": [

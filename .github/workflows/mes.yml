@@ -6,6 +6,32 @@ permissions:
   contents: read
   packages: write
 jobs:
+  windows-desktop:
+    runs-on: windows-latest
+    timeout-minutes: 35
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 24
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: backend/go.mod
+          cache-dependency-path: backend/go.sum
+      - run: npm run install:ci
+      - name: Check MES desktop identity and data boundaries
+        run: node --test tests/desktop-identity.test.cjs
+      - name: Build Windows MES desktop backend and assets
+        run: npm run desktop:prepare
+      - name: Package unpacked Windows MES desktop app
+        run: npm run desktop:package
+      - uses: actions/upload-artifact@v4
+        with:
+          name: forgeflow-mes-windows-${{ github.sha }}
+          path: outputs/desktop/win-unpacked/
+          if-no-files-found: error
+          retention-days: 7
+
   mes:
     runs-on: ubuntu-latest
     timeout-minutes: 30
