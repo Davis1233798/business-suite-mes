@@ -168,16 +168,14 @@ jobs:
           value = p.read_text().replace('${MES_DEPLOY_TARGET#*@}', os.environ['MES_DEPLOY_TARGET'].split('@', 1)[1]).replace('${MES_DEPLOY_TARGET%@*}', os.environ['MES_DEPLOY_TARGET'].split('@', 1)[0])
           p.write_text(value)
           PY
-      - name: Upload and deploy isolated MES release
-        env:
-          MES_DEPLOY_TARGET: ${{ secrets.MES_DEPLOY_TARGET }}
+      - name: Verify the fixed remote deployment gateway
         run: |
           set -euo pipefail
-          archive="/srv/business-suite-mes/staging/${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.tgz"
-          remote_script="/srv/business-suite-mes/staging/${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.sh"
+          status="$(ssh -F "$HOME/.ssh/config" -T mes-production status)"
+          printf '%s' "$status" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d == {"protocol":1,"ready":True,"runtime_user":"mes-runtime","docker_mode":"rootless","project":"business-suite-mes","data_volume":"business-suite-mes-station-data","port":"127.0.0.1:18095"}'
+      - name: Deploy isolated MES release through the forced command
+        run: |
+          set -euo pipefail
           digest="$(sha256sum deploy-artifact/mes-source.tgz | cut -d' ' -f1)"
-          script_digest="$(sha256sum infra/linux/deploy-mes-release.sh | cut -d' ' -f1)"
-          scp -F "$HOME/.ssh/config" deploy-artifact/mes-source.tgz "mes-production:$archive"
-          scp -F "$HOME/.ssh/config" infra/linux/deploy-mes-release.sh "mes-production:$remote_script"
-          ssh -F "$HOME/.ssh/config" -T mes-production \
-            "printf '%s  %s\n' '$script_digest' '$remote_script' | sha256sum --check --status && MES_DEPLOY_ROOT=/srv/business-suite-mes MES_DEPLOY_PROJECT=business-suite-mes MES_DEPLOY_DATA_VOLUME=business-suite-mes-station-data MES_DEPLOY_PORT=18095 bash '$remote_script' '$GITHUB_SHA' '$digest' '$archive' </dev/null"
+          ssh -F "$HOME/.ssh/config" -T mes-production "deploy $GITHUB_SHA $digest" \
+            < deploy-artifact/mes-source.tgz

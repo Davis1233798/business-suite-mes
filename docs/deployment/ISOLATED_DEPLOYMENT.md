@@ -2,13 +2,15 @@
 
 ## 範圍
 
-此範本將本 repo 的 MES Go 工作站部署為單一、獨立的 OCI/Linux Compose 專案。它不呼叫、不讀取、不重啟既有 `business-suite` Compose project，不掛載 Docker socket，也不改動既有共享 edge、Web、資料庫、volume 或 DNS。正式站固定使用 Compose project `business-suite-mes`、service `mes-station`、volume `business-suite-mes-station-data` 及 loopback port `18095`。測試 root 僅能使用各自唯一的測試 project、volume 與 port。
+此範本將本 repo 的 MES Go 工作站部署為專用 Linux 主機上的獨立 Compose 專案。該主機不得承載 portfolio 共用 stack 或其資料。正式站固定使用 Compose project `business-suite-mes`、service `mes-station`、volume `business-suite-mes-station-data` 及 loopback port `18095`。測試 root 僅能使用各自唯一的測試 project、volume 與 port。
+
+生產 Docker daemon 必須以 `mes-runtime` 帳號使用 rootless mode。GitHub SSH 帳號 `mes-deploy` 不得加入 `docker` 群組、不得讀取任何 Docker socket、不得取得互動 shell。root-owned SSH forced-command gateway 僅接受 `status` 和 `deploy <git-sha> <archive-sha256>`；收到 archive 後，gateway 將部署工作交給 `mes-runtime` 執行。這樣限制 CI key 的登入命令及其主機權限；rootless Docker 仍允許 CI 發布任意 MES 應用程式版本，因此專用 MES 主機仍是必要的信任邊界。不能把同機 `docker` 群組、Compose project 名稱或容器 label 當成 host isolation。
 
 本次只部署此 repo 的 Go 工作站映像；它用自己的 SQLite volume。Vinext/Cloudflare Workers、D1 資料庫與既有展示資料不會自動遷移或共用。MES 根 hostname/DNS/Caddy 設定由維運人員另行審核；此部署器只在明確設定的 loopback port 提供 upstream，預設不建立公開入口。
 
 ## 發布流程與邊界
 
-1. `main` push 的 CI 驗證成功後，將該 commit 的 source archive 與 SHA-256 作為短期 artifact。部署 job 僅在 `MES_DEPLOY_ENABLED=true` 時進入 `mes-production` GitHub Environment；需在 GitHub 外部配置專用部署帳號與專屬 SSH secrets。工作流程以預先核對的 known-host key、`StrictHostKeyChecking=yes` 上傳唯一檔名 archive 及部署腳本，並提供完整 Git SHA 與 archive SHA-256。部署器拒絕不符合格式的輸入及校驗失敗的 archive。未設定啟用變數或 secrets 時不部署。
+1. `main` push 的 CI 驗證成功後，將該 commit 的 source archive 與 SHA-256 作為短期 artifact。部署 job 僅在 `MES_DEPLOY_ENABLED=true` 時進入 `mes-production` GitHub Environment；需在 GitHub 外部配置專用部署帳號與專屬 SSH secrets。工作流程以預先核對的 known-host key、`StrictHostKeyChecking=yes` 將 archive 以 SSH stdin 傳給固定 forced command；不使用 SCP/SFTP、不上傳或遠端執行 CI 提供的 shell script。請求只包含完整 Git SHA 與 archive SHA-256。部署器拒絕不符合格式的輸入及校驗失敗的 archive。未設定啟用變數或 secrets 時不部署。
 2. 部署器在 `/srv/business-suite-mes` 下建立唯一本次 release 目錄，將 archive 解壓至其中。`Dockerfile.station` 的 Node build stage 從 archive 中的 `package-lock.json` 與前端來源安裝鎖定依賴並執行 `npm run web:build`。前端輸入包含 `web/`、`public/`、`app/globals.css` 所引用的 `app/suite.css`、`app/expressive.css`，以及 `vendor/shadcn-tailwind-4.13.0.css`；Docker build context 必須保留這些相對路徑。Go build stage 編譯 backend。此 archive 不依賴本機/CI 的 `web-dist` 或 `node_modules`。
 3. 以 `business-suite-mes` Compose project 單獨啟動 `mes-station`；資料 volume 固定為 `business-suite-mes-station-data`。部署器檢查 project 中所有 container，若出現非 MES service 或多個 MES service 即拒絕操作。正式 root 必須由維運預先建立並放置 owner marker；部署器不會自行認領既有目錄。舊服務映像以 digest/tag 保留；部署前記錄舊 release。
 4. 僅以 `http://127.0.0.1:<MES_DEPLOY_PORT>/api/health` 驗證。連續健康檢查成功後才更新 `/srv/business-suite-mes/current` symlink。
@@ -16,29 +18,42 @@
 
 Compose project、volume 與 loopback port 在正式環境不可覆寫；部署前須確認 port 未被占用且 Docker 名稱沒有外站資源衝突。此 port 不應直接開放公網。前置代理需由獨立、明確核准的變更接到 `127.0.0.1:18095`，不得覆寫共享 Caddy 設定。部署 job 不建立 DNS、TLS、Caddy route 或公開 ingress。
 
-## 主機前置條件
+## 主機前置條件及權限
 
-- Linux 主機已安裝 Docker Engine/Compose v2、Bash、Python 3、`flock`、`sha256sum`、`tar`、`curl`。
-- 維運人員需先建立 `/srv/business-suite-mes`、`releases/`、`staging/`、專用 Unix 部署帳號，以及內容恰為 `business-suite-mes/v1` 的 `.mes-deploy-owner` marker。部署帳號有權管理本機 Docker，並能寫入此 root；不得共用中央站台部署帳號。
+- 專用 Linux 主機已安裝 rootless Docker Engine/Compose v2、Bash、Python 3、`flock`、`sha256sum`、`tar`、`curl`。
+- 維運人員需建立互相隔離的 `mes-deploy` 與 `mes-runtime` 帳號。`mes-runtime` 擁有自己的 rootless Docker daemon、MES project 和資料；`mes-deploy` 沒有 Docker 權限、沒有 runtime home/data 存取權，也不能互動登入。不要將任何帳號加入 rootful `docker` 群組。
+- 將 `infra/linux/mes-deploy-gateway.py` 安裝為 root-owned、不可由兩個 service account 修改的 `/usr/local/sbin/mes-deploy-gateway`；`infra/linux/mes-deploy.sudoers` 僅允許 `mes-deploy` 以 root 執行這支固定檔案。將 `infra/linux/sshd-mes-deploy.conf` 的 `Match User mes-deploy` 設定放在 sshd 有效設定的最後，並停用 TTY、TCP/stream-local/agent forwarding、X11、密碼和 user rc。以 `sshd -T -C user=mes-deploy,host=<host>,addr=<runner-ip>` 核對 effective policy。Gateway 只允許 `status`、`deploy <sha> <digest>`，且只以 `runuser -u mes-runtime` 啟動受控發布程序；不得接受任意命令、路徑、Compose project、volume 或 port。
+- 維運人員預先建立 `/srv/business-suite-mes`、`releases/`、`staging/` 及內容恰為 `business-suite-mes/v1` 的 `.mes-deploy-owner` marker。`/srv/business-suite-mes` 由 `mes-runtime` 擁有且不可被 `mes-deploy` traverse；`staging/` 應為 `root:mes-runtime`、`0750`，讓 root gateway 可放置交付包、runtime 可讀。部署 helper 從已校驗的 main archive 解出後，以 `mes-runtime` 身分執行。資料 volume 由 `mes-runtime` 的 rootless daemon 管理；不得指向共用 Docker socket 或任何共享資料目錄。
 - 專用 GitHub Environment `mes-production` 提供專屬 `MES_DEPLOY_TARGET`、`MES_DEPLOY_KEY`、經帶外核對的 `MES_DEPLOY_HOST_KEY`，及 repository variable `MES_DEPLOY_ENABLED=true`。不得重用中央 `OCI_*` secrets。私鑰/憑證值不得傳給部署腳本參數或輸出到日誌。
 - staging archive 來源只允許受信任 `main` workflow；確認 GitHub Environment 核准者、主機網路政策與 SSH host key 後，才可設定啟用變數。
 - 首次部署前人工確認 release root owner marker、磁碟空間、Docker project/volume 名稱沒有既有衝突，以及 loopback port 空閒。部署器不會清理共享資源或自動建立 owner marker。
 
-## 操作
+## 操作與遠端安全驗收
 
-部署器需在主機執行，輸入為已上傳的 repo archive：
+由維運人員將 root-owned gateway、sudoers 規則和 SSH 限制檔安裝到專用 host；先以 `visudo -cf /etc/sudoers.d/mes-deploy` 與 `sshd -t` 驗證設定，再 reload sshd。`mes-runtime` 需啟用 user linger 並啟動自己的 rootless Docker daemon。部署資料夾與 marker 的參考建立方式如下，應先確認目標是新建的專用 MES host：
 
 ```bash
-sudo install -d -m 0750 -o mes-deploy -g mes-deploy /srv/business-suite-mes/releases /srv/business-suite-mes/staging
+sudo install -d -m 0750 -o mes-runtime -g mes-runtime /srv/business-suite-mes /srv/business-suite-mes/releases
+sudo install -d -m 0750 -o root -g mes-runtime /srv/business-suite-mes/staging
 printf 'business-suite-mes/v1\n' | sudo tee /srv/business-suite-mes/.mes-deploy-owner
-MES_DEPLOY_ROOT=/srv/business-suite-mes \
-MES_DEPLOY_PROJECT=business-suite-mes \
-MES_DEPLOY_DATA_VOLUME=business-suite-mes-station-data \
-MES_DEPLOY_PORT=18095 \
-bash infra/linux/deploy-mes-release.sh <40-char-git-sha> <64-char-archive-sha256> /srv/business-suite-mes/staging/<sha>.tgz
+sudo chmod 0444 /srv/business-suite-mes/.mes-deploy-owner
+sudo -u mes-runtime env XDG_RUNTIME_DIR=/run/user/"$(id -u mes-runtime)" DOCKER_HOST=unix:///run/user/"$(id -u mes-runtime)"/docker.sock docker info --format '{{json .SecurityOptions}}'
 ```
 
-工作流程中的部署 job 只會在上述 GitHub Environment secrets 和 `MES_DEPLOY_ENABLED=true` 都設定後執行。此 repo 不包含正式主機、secrets 或 host key；目前不能宣稱自動部署已啟用。
+Gateway 檔案請安裝為 `root:root` mode `0750`，sudoers 檔案 `root:root` mode `0440`。Forced command 會用 sudo 把原始 SSH 命令作單一參數傳給 gateway；不允許 scp/SFTP 或遠端 shell。Deploy public key 與 `mes-deploy` 帳號設定只由維運人員透過 host provisioning 完成。可用下列命令部署並檢查程式檔案；實際 host 變更需在專用主機維護流程內執行：
+
+```bash
+sudo install -o root -g root -m 0750 infra/linux/mes-deploy-gateway.py /usr/local/sbin/mes-deploy-gateway
+sudo install -o root -g root -m 0440 infra/linux/mes-deploy.sudoers /etc/sudoers.d/mes-deploy
+sudo visudo -cf /etc/sudoers.d/mes-deploy
+sudo sshd -t
+```
+
+在加入 GitHub Environment secrets 前，以 root 於專用 staging 主機執行 `sudo bash infra/linux/test-mes-host-isolation.sh`。這是唯讀主機稽核，確認 deploy/runtime 帳號邊界、rootless daemon、SSH forced command 與固定路徑。它不得在含有 portfolio `/srv/business-suite` 的主機執行。
+
+保留現有 `infra/linux/test-mes-deployment.sh` 作隔離 Compose 專案的建立、健康、資料持久與 rollback 回歸測試。該腳本會建立並刪除暫存 Docker 資源，只能在 disposable runner 或專用測試主機執行，不能在正式主機執行。
+
+工作流程中的部署 job 保留 `main` push 自動觸發語意，只會在上述 GitHub Environment secrets 和 `MES_DEPLOY_ENABLED=true` 都設定後執行。此 repo 不包含正式主機、secrets 或 host key；目前不能宣稱自動部署已啟用。
 
 ## 驗收與回滾
 

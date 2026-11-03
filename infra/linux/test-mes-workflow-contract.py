@@ -9,8 +9,13 @@ mes = workflow.split("\n  mes:\n", 1)[1].split("\n  release:\n", 1)[0]
 release = workflow.split("\n  release:\n", 1)[1].split("\n  deploy:\n", 1)[0]
 deploy = workflow.split("\n  deploy:\n", 1)[1]
 script = Path("infra/linux/deploy-mes-release.sh").read_text()
+gateway = Path("infra/linux/mes-deploy-gateway.py").read_text()
 docs = Path("docs/deployment/ISOLATED_DEPLOYMENT.md").read_text()
 acceptance = Path("infra/linux/test-mes-deployment.sh").read_text()
+host_audit = Path("infra/linux/test-mes-host-isolation.sh").read_text()
+ssh_policy = Path("infra/linux/sshd-mes-deploy.conf").read_text()
+sudo_policy = Path("infra/linux/mes-deploy.sudoers").read_text()
+compose = Path("infra/linux/compose.mes-isolated.yaml").read_text()
 
 # Execute the workflow's checksum path convention against a downloaded artifact layout.
 with tempfile.TemporaryDirectory(prefix="mes-artifact-checksum-") as temporary:
@@ -44,15 +49,10 @@ required = {
     "dedicated SSH key": "secrets.MES_DEPLOY_KEY",
     "pinned SSH host key": "secrets.MES_DEPLOY_HOST_KEY",
     "strict host checking": "StrictHostKeyChecking yes",
-    "unique archive upload": "${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.tgz",
-    "uploaded deployment script": "deploy-mes-release.sh",
-    "remote script checksum verification": "sha256sum --check --status",
-    "script file execution": "bash '$remote_script'",
-    "closed script stdin": "</dev/null",
-    "fixed production root": "MES_DEPLOY_ROOT=/srv/business-suite-mes",
-    "fixed MES project": "MES_DEPLOY_PROJECT=business-suite-mes",
-    "fixed MES volume": "MES_DEPLOY_DATA_VOLUME=business-suite-mes-station-data",
-    "fixed loopback port": "MES_DEPLOY_PORT=18095",
+    "status request through forced command": "mes-production status",
+    "deploy request through forced command": '"deploy $GITHUB_SHA $digest"',
+    "archive delivered over stdin": "< deploy-artifact/mes-source.tgz",
+    "fixed gateway status step": "fixed remote deployment gateway",
 }
 for label, value in required.items():
     if value not in deploy:
@@ -82,14 +82,33 @@ if "actions/upload-artifact@v4" in mes:
 if "needs: [mes, windows-desktop, release]" not in deploy:
     raise SystemExit("Deployment must depend on MES, Windows desktop, and the gated release artifact")
 
-for forbidden in ("OCI_DEPLOY_KEY", "/srv/business-suite/current", "business-suite-station-data", "ssh-keyscan"):
+for forbidden in ("OCI_DEPLOY_KEY", "/srv/business-suite/current", "business-suite-station-data", "ssh-keyscan", "scp ", "remote_script", "bash '$remote_script'"):
     if forbidden in deploy:
         raise SystemExit(f"Workflow deploy job references forbidden shared deployment setting: {forbidden}")
 
-if "bash -s" in deploy or "< infra/linux/deploy-mes-release.sh" in deploy:
-    raise SystemExit("Deployment script must be uploaded, checksum-verified, and executed as a file with stdin closed")
+if "SSH_ORIGINAL_COMMAND" not in ssh_policy or "runuser -u mes-runtime" not in gateway:
+    raise SystemExit("Forced-command gateway must validate SSH commands and run deployment as mes-runtime")
+if "docker info" not in gateway or "rootless" not in gateway:
+    raise SystemExit("Forced-command gateway must require the mes-runtime rootless Docker daemon")
+if '"$root" == /srv/business-suite-mes' not in script or "MES_REQUIRE_ROOTLESS_DOCKER" not in script or '"name=rootless"' not in script:
+    raise SystemExit("Production deployment helper must reject rootful or non-mes-runtime Docker contexts")
+for value in ("status", "deploy", "MAX_ARCHIVE", "sha256", "runuser", "127.0.0.1:18095", "business-suite-mes/v1"):
+    if value not in gateway:
+        raise SystemExit(f"Forced-command gateway is missing validation: {value}")
+if "SSH_ORIGINAL_COMMAND" not in ssh_policy or "ForceCommand" not in ssh_policy or "DisableForwarding yes" not in ssh_policy or "AllowStreamLocalForwarding no" not in ssh_policy:
+    raise SystemExit("SSH policy must route all MES deploy logins through the fixed gateway")
+if "mes-deploy ALL=(root) NOPASSWD: /usr/local/sbin/mes-deploy-gateway" not in sudo_policy:
+    raise SystemExit("Sudo policy must grant only the fixed root-owned gateway")
+if "sudo -n docker" in deploy or "docker compose" in deploy:
+    raise SystemExit("Workflow must not receive direct Docker permissions")
+for value in ("127.0.0.1:${MES_DEPLOY_PORT:-18095}:8095", "mes-station-data"):
+    if value not in compose:
+        raise SystemExit(f"MES Compose contract is missing {value}")
+for value in ("/var/run/docker.sock", "privileged: true", "network_mode: host"):
+    if value in compose:
+        raise SystemExit(f"MES Compose contract contains a forbidden host escape: {value}")
 
-for value in ("business-suite-mes/v1", "business-suite-mes-station-data", "MES_DEPLOY_ENABLED=true", "mes-production"):
+for value in ("business-suite-mes/v1", "business-suite-mes-station-data", "MES_DEPLOY_ENABLED=true", "mes-production", "rootless", "ForceCommand"):
     if value not in docs:
         raise SystemExit(f"Deployment boundary documentation is missing: {value}")
 
@@ -100,6 +119,10 @@ for value in ("Production project, data volume, and port are fixed", "unexpected
 for value in ("compose_volume_matches", "A missed volume substitution passed the compose isolation guard", "Refusing cleanup of non-test volume", "Refusing cleanup: test project or effective volume"):
     if value not in acceptance:
         raise SystemExit(f"Remote acceptance is missing test-volume safety coverage: {value}")
+
+for value in ("mes-deploy", "mes-runtime", "rootless", "/var/run/docker.sock", "ForceCommand", "business-suite"):
+    if value not in host_audit:
+        raise SystemExit(f"Remote host isolation audit is missing: {value}")
 
 
 print("MES deployment workflow and isolation contract passed.")

@@ -2,19 +2,17 @@
 
 ## MES 單站隔離部署範本
 
-本 repo 新增的 [MES 獨立部署架構](../../docs/deployment/ISOLATED_DEPLOYMENT.md) 及 `compose.mes-isolated.yaml` / `deploy-mes-release.sh` 是單獨的選用流程：專案 `mes`、服務 `mes-station`、volume `mes-mes-station-data`、loopback port 預設 `18095`。它只管理自己的服務，不使用本頁下方共享 `business-suite` project，不切換既有 edge，不接管 DNS。主機先安裝此 repo 的 release archive，再由核准的維運流程執行部署器。
+本 repo 的 [MES 獨立部署架構](../../docs/deployment/ISOLATED_DEPLOYMENT.md) 使用專用 MES Linux host、rootless Docker daemon、專案 `business-suite-mes`、服務 `mes-station`、volume `business-suite-mes-station-data`、loopback port `18095`。部署 key 只觸發 root-owned forced-command gateway，不直接使用 Docker；gateway 再以 `mes-runtime` 身分執行 `deploy-mes-release.sh`。不使用本頁下方共享 `business-suite` project、不切換既有 edge、不接管 DNS。
 
-這是獨立服務部署範本，不代表目前已連線或已部署至 OCI。現有 GitHub workflow 只驗證並發布 GHCR image；尚未配置受保護的主機部署環境或 SSH 上傳工作，因此不會在 push 時自動更新主機。
+`main` push 保留現有自動部署流程；只有當 `MES_DEPLOY_ENABLED=true` 且 `mes-production` 環境所需 secrets 已配置時，部署 job 才連線。沒有這些主機端設定時不會部署。本文檔與 workflow 不證明任何特定主機已完成 provisioning。
 
-在主機部署前先按架構文件核對 SSH host key、權限、Compose project/volume 名稱及 port。archive 必須位於 `/srv/business-suite-mes/staging/`，呼叫時提供 Git commit SHA 及 archive SHA-256：
+新增或更新 gateway 前，先在專用 staging host 執行唯讀權限驗收：
 
 ```bash
-MES_DEPLOY_ROOT=/srv/business-suite-mes MES_DEPLOY_PORT=18095 \
-  bash infra/linux/deploy-mes-release.sh <40-char-git-sha> <64-char-archive-sha256> \
-  /srv/business-suite-mes/staging/<sha>.tgz
+sudo bash infra/linux/test-mes-host-isolation.sh
 ```
 
-部署器只以 loopback `/api/health` 決定是否切換 `current`，失敗時回復 MES image/config，不刪除 volume；rollback 任一步失敗會以 exit 70 明確要求人工介入。Archive 僅接受普通檔案與目錄，拒絕 symlink、hardlink、特殊項目及路徑穿越。公開 hostname/TLS/反向代理仍需另外核准與外部驗收；本範本不建立或修改公開入口。`bash infra/linux/test-mes-deployment.sh` 會清除它建立的專用測試 Compose project、測試 volume 與唯一 `/tmp` 測試 root，也會驗證惡意 archive 拒絕及舊 image rollback；只能在空白隔離主機/checkout 執行，禁止在正式或共享主機執行。
+自動部署流程透過 SSH stdin 傳送 artifact，只接受固定 `status` 和 `deploy <sha> <digest>` 命令；不使用 SCP/SFTP，不上傳或遠端執行 workflow 提供的 shell script。部署器只以 loopback `/api/health` 決定是否切換 `current`，失敗時回復 MES image/config，不刪除 volume；rollback 任一步失敗會以 exit 70 明確要求人工介入。Archive 僅接受普通檔案與目錄，拒絕 symlink、hardlink、特殊項目及路徑穿越。公開 hostname/TLS/反向代理仍需另外核准與外部驗收；本範本不建立或修改公開入口。`bash infra/linux/test-mes-deployment.sh` 會清除它建立的專用測試 Compose project、測試 volume 與唯一 `/tmp` 測試 root，也會驗證惡意 archive 拒絕及舊 image rollback；只能在 disposable runner 或專用測試環境執行，禁止在正式或共享主機執行。
 
 部署 archive 不需帶入本機 `web-dist` 或 `node_modules`。MES station Dockerfile 會在 Node build stage 依 `package-lock.json` 安裝依賴、從 `web/` 建置前端，再編譯 Go 工作站；`.dockerignore` 明確排除產物與本機資料。遠端驗收會用 `git archive` 建立無 `web-dist` 的 source archive 並直接測部署建置。
 

@@ -34,9 +34,17 @@ fi
 archive_real=$(realpath -e -- "$archive")
 staging_real=$(realpath -e -- "$root/staging")
 [[ "$archive_real" == "$staging_real/"* ]] || { echo 'Archive must be under the MES staging directory' >&2; exit 2; }
+if [[ "$root" == /srv/business-suite-mes || "${MES_REQUIRE_ROOTLESS_DOCKER:-0}" == 1 ]]; then
+  [[ "$(id -un)" == mes-runtime && "$(id -u)" -ne 0 ]] || { echo 'Production MES deployment must run as the non-root mes-runtime account' >&2; exit 1; }
+  expected_socket="unix:///run/user/$(id -u)/docker.sock"
+  [[ "${DOCKER_HOST:-}" == "$expected_socket" && -S "/run/user/$(id -u)/docker.sock" ]] || { echo 'Production MES deployment must use mes-runtime rootless Docker socket' >&2; exit 1; }
+  docker_security=$(docker info --format '{{json .SecurityOptions}}')
+  [[ "$docker_security" == *'"name=rootless"'* ]] || { echo 'Production MES deployment refuses a rootful Docker daemon' >&2; exit 1; }
+else
+  docker info >/dev/null
+fi
 exec 9>"$root/deploy.lock"
 flock -n 9 || { echo 'Another MES deployment is running' >&2; exit 1; }
-docker info >/dev/null
 
 if docker volume inspect "$data_volume" >/dev/null 2>&1; then
   volume_project=$(docker volume inspect --format '{{ index .Labels "com.docker.compose.project" }}' "$data_volume")
