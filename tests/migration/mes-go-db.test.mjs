@@ -1,4 +1,5 @@
 import assert from 'node:assert/strict';
+import { spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -122,6 +123,12 @@ test('preserves verified MES report retry key and response while excluding other
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM idempotency_keys WHERE endpoint='/api/shop/checkout'").get().n, 0);
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM mes_production_reports WHERE idempotency_key='report-retry-001'").get().n, 1);
   db.close();
+  const replay = spawnSync('go', ['test', '-run', '^TestMESImportedRetryReplay$', '-count=1', '.'], {
+    cwd: path.join(root, 'backend'),
+    env: { ...process.env, MES_IMPORTED_RETRY_DB: destination },
+    encoding: 'utf8',
+  });
+  assert.equal(replay.status, 0, `Go API replay verification failed:\n${replay.stdout}\n${replay.stderr}`);
 });
 
 test('refuses existing destination without changing source or destination', t => {
