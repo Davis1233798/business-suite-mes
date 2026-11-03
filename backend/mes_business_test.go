@@ -1,13 +1,80 @@
 package main
 
 import (
+	"bytes"
 	"context"
+	"database/sql"
 	"encoding/json"
 	"fmt"
 	"net/http"
+	"net/http/httptest"
+	"os"
 	"sync"
 	"testing"
 )
+
+// Invoked by the synthetic migration test with an imported database path.
+// This exercises the real report handler against the actual migration output.
+func TestMESImportedRetryReplay(t *testing.T) {
+	dbPath := os.Getenv("MES_IMPORTED_RETRY_DB")
+	if dbPath == "" {
+		t.Skip("MES_IMPORTED_RETRY_DB is set by the synthetic migration test")
+	}
+	db, err := sql.Open("sqlite", dbPath)
+	if err != nil {
+		t.Fatal(err)
+	}
+	defer db.Close()
+	a := &App{db: db}
+	identity := &Identity{UserID: "user-a", OrganizationID: "tenant-a"}
+	grant := &Grant{Site: "mes", Role: "operator", Scope: "front", Enabled: true}
+	path := "/api/stations/mes/business"
+	input := map[string]any{"action": "report", "workOrderId": "wo-a", "operationId": "op-a", "goodQuantity": 4, "scrapQuantity": 0, "idempotencyKey": "report-retry-001"}
+	var before int
+	if err = db.QueryRow("SELECT count(*) FROM mes_production_reports WHERE idempotency_key=?", "report-retry-001").Scan(&before); err != nil {
+		t.Fatal(err)
+	}
+	w := httptest.NewRecorder()
+	r := httptest.NewRequest(http.MethodPost, path, mustJSONReader(t, input))
+	r.Header.Set("Content-Type", "application/json")
+	a.mesBusiness(w, r, identity, grant)
+	if w.Code != http.StatusOK {
+		t.Fatalf("same-key replay status=%d body=%s", w.Code, w.Body.String())
+	}
+	var payload struct {
+		Data map[string]any `json:"data"`
+	}
+	if err = json.Unmarshal(w.Body.Bytes(), &payload); err != nil {
+		t.Fatal(err)
+	}
+	if payload.Data["reportId"] != "report-a" {
+		t.Fatalf("replay returned wrong report: %v", payload.Data)
+	}
+	input["goodQuantity"] = 3
+	w = httptest.NewRecorder()
+	r = httptest.NewRequest(http.MethodPost, path, mustJSONReader(t, input))
+	r.Header.Set("Content-Type", "application/json")
+	a.mesBusiness(w, r, identity, grant)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("changed-payload replay status=%d body=%s", w.Code, w.Body.String())
+	}
+	var after int
+	if err = db.QueryRow("SELECT count(*) FROM mes_production_reports WHERE idempotency_key=?", "report-retry-001").Scan(&after); err != nil {
+		t.Fatal(err)
+	}
+	if after != before {
+		t.Fatalf("replay created report: before=%d after=%d", before, after)
+	}
+}
+
+func mustJSONReader(t *testing.T, value any) *bytes.Reader {
+	t.Helper()
+	body, err := json.Marshal(value)
+	if err != nil {
+		t.Fatal(err)
+	}
+	return bytes.NewReader(body)
+}
 
 func TestMESBusinessReportRaceIsAtomicAndTenantScoped(t *testing.T) {
 	a := appForTest(t)

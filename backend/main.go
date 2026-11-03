@@ -128,7 +128,7 @@ func openDB(file string) (*sql.DB, error) {
 			return nil, fmt.Errorf("refusing existing database without MES repository marker; use a new database path")
 		}
 	}
-	files = append(files, "mes_guards.sql", "0003_mes_projection.sql", "0004_station_identity.sql", "0005_traffic_lab.sql")
+	files = append(files, "mes_guards.sql", "0003_mes_projection.sql", "0004_station_identity.sql", "0005_traffic_lab.sql", "0006_mes_finished_goods.sql", "0007_mes_finished_goods_resolutions.sql")
 	for _, f := range files {
 		b, err := migrations.ReadFile("migrations/" + f)
 		if err != nil {

@@ -48,6 +48,8 @@ jobs:
       - run: npm run install:ci
       - run: npx tsc --noEmit
       - run: npm test
+      - name: Verify offline MES database migration using synthetic SQLite files
+        run: node --test tests/migration/mes-go-db.test.mjs
       - run: go -C backend test -race -timeout=20m ./...
       - run: npm run web:build
       - name: Build MES image
