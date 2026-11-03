@@ -78,7 +78,7 @@ command -v ss >/dev/null || { echo 'ss is required to verify the test port is fr
 ! ss -H -ltn "sport = :${port}" | grep -q . || { echo "Test port is already in use: $port" >&2; exit 2; }
 ! ss -H -ltn "sport = :${deploy_port}" | grep -q . || { echo "Deploy test port is already in use: $deploy_port" >&2; exit 2; }
 export MES_RELEASE_SHA="$sha" MES_DEPLOY_PORT="$port"
-sed "s/name: mes-mes-station-data/name: ${test_volume}/" infra/linux/compose.mes-isolated.yaml >"$compose_file"
+sed "s|name: \${MES_DEPLOY_DATA_VOLUME:-mes-mes-station-data}|name: ${test_volume}|" infra/linux/compose.mes-isolated.yaml >"$compose_file"
 
 docker compose --project-name "$project" --file "$compose_file" config --quiet
 docker compose --project-name "$project" --file "$compose_file" up --build --detach --wait --wait-timeout 180
