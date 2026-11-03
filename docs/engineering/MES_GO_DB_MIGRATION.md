@@ -1,7 +1,9 @@
 # Shared Go SQLite to MES-only database migration
 
-Status: design and acceptance contract only. No importer exists yet. Do not point
-this procedure at a live database or switch `SUITE_DB` based on this document.
+Status: offline importer and synthetic acceptance suite are implemented. The
+tool is not production-certified; do not run it against a live/shared database
+or switch `SUITE_DB` based only on this document. CI is the required first
+execution evidence.
 
 ## Source and target boundary
 
@@ -17,29 +19,30 @@ marker copied from the source.
 
 | Action | Tables | Policy |
 | --- | --- | --- |
-| Copy | `organizations`, `mes_products`, `mes_bom_versions`, `mes_bom_items`, `mes_work_centers`, `mes_work_orders`, `mes_operations`, `mes_material_lots`, `mes_work_order_materials`, `mes_production_reports`, `mes_quality_checks`, `mes_downtime_events`, `audit_events` | Preserve tenant IDs and primary keys; copy rows for organizations with MES business data. Preserve audit history only for the selected tenant IDs. |
-| Copy with filtering | `users`, `memberships`, `station_accounts`, `station_grants` | Keep only users referenced by retained MES memberships, MES audit actors, MES reporters/inspectors, or accounts in retained organizations. Keep only `site='mes'` grants. Preserve password hashes only for explicitly retained MES accounts; otherwise require credential reset/reprovisioning. |
-| Recreate empty | `station_sessions`, `station_login_limits`, `idempotency_keys`, `outbox_events`, `suite_migrations`, `mes_projection_revisions`, `demo_seed_states`, `traffic_runs`, `traffic_records` | Sessions and rate limits are ephemeral. Idempotency keys are only safe to transfer if endpoint semantics and retention are unchanged; default is reset. Outbox is delivery state and must be empty at cutover or explicitly drained/rebuilt. Projection revisions are rebuilt by the MES migrations. Demo and traffic state is not business data. |
-| Exclude | Every other table, including all `erp_*`, `pos_*`, `crm_*`, `dining_*`, and `shop_*` tables | Never copy. A nonempty source MES outbox must block migration until its events are resolved; silently dropping it can lose projection updates. |
+| Copy | `organizations`, `mes_products`, `mes_bom_versions`, `mes_bom_items`, `mes_work_centers`, `mes_work_orders`, `mes_operations`, `mes_material_lots`, `mes_work_order_materials`, `mes_production_reports`, `mes_quality_checks`, `mes_downtime_events` | Preserve tenant IDs and primary keys for explicitly selected organizations. |
+| Copy with filtering | `users`, `memberships`, `station_accounts`, `station_grants`, `audit_events` | Keep only identities referenced by retained MES memberships, MES actions, MES reporters/inspectors/operators, or accounts for selected organizations. Keep only `site='mes'` grants and `action LIKE 'mes.%'` audit history. Password hashes are retained for selected MES accounts; cross-tenant account/membership reuse fails closed. |
+| Recreate empty | `station_sessions`, `station_login_limits`, `idempotency_keys`, `demo_seed_states`, `traffic_runs`, `traffic_records` | Sessions, rate limits, idempotency and demo/traffic state are reset. No sessions are copied. |
+| Rebuild | `outbox_events`, `suite_migrations`, `mes_projection_revisions` | Any source outbox row blocks migration. MES projection schema/backfill is created from imported work orders; source delivery state is not copied. |
+| Exclude | Every other table, including all `erp_*`, `pos_*`, `crm_*`, `dining_*`, and `shop_*` tables | Never copy. Resolve all source outbox rows first; silently dropping another station's events could lose work. |
 
-The actual table dependency list must be generated/reviewed against the exact
-source and target migration versions. Existing Go migrations define few foreign
-keys for MES business tables, so application-level tenant/reference checks are
-also required; `PRAGMA foreign_key_check` alone is insufficient.
+The importer pins a reviewed list against the repository migrations. Existing
+Go migrations define few foreign keys for MES business tables, so application-
+level tenant/reference checks supplement `PRAGMA foreign_key_check`.
 
 ## Required importer properties
 
 1. Validate source marker/version and integrity, list all tables/counts, and
    reject unknown schema versions or missing expected tables.
-2. Create a consistent private backup without write access to source. Record
-   source hash, snapshot hash, schema commit, and per-table counts in a manifest
-   that contains no row contents or credentials.
+2. Create a consistent private backup without write access to source. Emit the
+   content snapshot hash and per-table copied/target counts without row contents
+   or credentials.
 3. Build target schema in a staging file beside the target, then transactionally
    copy the exact allowlisted tables with tenant/account filtering.
 4. Before commit, verify tenant membership, cross-table references, row counts,
    per-row equality (including NULL/blob handling), and FK checks. Assert no
    excluded station data was copied and no unauthorized grants remain.
-5. Verify destination integrity, add the MES marker last, close/fsync, and
+5. Verify destination integrity, add the MES marker last, close/fsync the staged
+   database, and
    atomically publish only if the final destination path still does not exist.
    Any failure removes staging files and leaves source and preexisting targets
    byte-for-byte unchanged.
@@ -48,24 +51,40 @@ also required; `PRAGMA foreign_key_check` alone is insufficient.
    no safe reverse merge after MES accepts writes unless a separately designed
    delta protocol exists.
 
-## Acceptance suite to add before enabling the importer
+## Offline command and acceptance suite
 
-Use only generated disposable databases. Cover MES data and each excluded
-station, multiple tenants, shared users with mixed station grants, audit actor
-references, null values, pending and delivered outbox states, duplicate IDs,
-missing tables, wrong markers, FK/reference violations, and incompatible
-columns. Assert the intended row set and exact row equality in the MES target;
-assert source bytes and an existing destination remain unchanged on every
-failure. Include a successful end-to-end import plus Go startup against the
-new target and representative MES start/report/readback. Tests must never use
+Use a stopped, backed-up source and a new destination path on the same
+filesystem. Select tenants explicitly; wildcard import is disabled:
+
+```powershell
+node scripts/migrate-mes-go-db.mjs --source C:\path\shared.sqlite --destination C:\path\mes-new.sqlite --organization ORG_ID
+node --test tests/migration/mes-go-db.test.mjs
+```
+
+The command performs a read-only source open, creates and verifies a consistent
+private snapshot, writes only an exclusive staging file, then atomically
+hard-links the complete target into a previously absent destination. It emits
+counts and a content snapshot hash, not row contents. Any source outbox events,
+unresolved references, unknown MES tables, unsupported markers, and identities
+also belonging to unselected tenants cause refusal. Target schema is bootstrapped
+from this repo's Go migrations without demo seeds.
+
+Tests use only generated disposable databases. Current synthetic cases cover
+tenant filtering, account hashes, MES-only grants/audit, session reset, rebuilt
+projection events, non-MES exclusion, existing destination protection,
+unresolved references, outbox refusal, cross-tenant identity refusal, and
+unsupported markers. Additional CI coverage should include missing tables,
+schema mismatch, and Go startup/business write-read against the imported target.
+Tests assert source bytes and existing destination remain unchanged on covered
+failure paths. Tests must never use
 `.data`, `.wrangler`, a configured hosting database, or a production URL.
 
 ## Known gap
 
 The existing Portfolio `scripts/migrate-legacy-sqlite.py` is a Node/Vinext
-site-schema importer. It does not import Go data, filter shared identities,
-move D1 data, or reconcile business semantics. MES Go and Vinext have separate
-SQLite files. The current target bootstrap creates its own demo organization
-and accounts, so importer/seed collision behavior must be resolved before a
-usable implementation can be accepted. D1 requires a separate export/import
-plan and is outside this Go SQLite migration.
+site-schema importer. It does not import Go data or move D1 data. MES Go and
+Vinext have separate SQLite files. The importer intentionally targets the Go
+database only and its base schema has no demo seed inserts. D1 requires a
+separate export/import plan and is outside this migration. CI has not yet
+executed for this change; passing CI still does not certify production data,
+full application workflows, downtime, or rollback after new MES writes.

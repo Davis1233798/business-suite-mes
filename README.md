@@ -28,6 +28,8 @@ go -C backend run .
 
 Go 工作站可從 `http://127.0.0.1:8095/mes/login` 進入。Go 預設資料庫可用 `SUITE_DB` 指定；既有含 `organizations` 且缺少 `mes_repository_schema` 標記的資料庫會被拒絕。Vinext 本機資料庫也檢查本站標記。請使用新路徑，舊資料不會自動遷移。
 
+Shared Go SQLite → MES-only Go SQLite 的離線匯入器與安全邊界見 [MES Go DB migration](docs/engineering/MES_GO_DB_MIGRATION.md)。只可從已停止寫入且已備份的來源執行，必須選取明確 organization，目的路徑必須不存在；工具拒絕任何 source outbox rows。先由 GitHub CI 執行合成資料驗收，勿直接對正式資料切換。
+
 本站 `npm test`、Go 測試及建置曾通過；測試已裁剪為本站範圍，原跨系統測試留在作品集 repo，不能視為跨系統或正式部署驗收。Vinext 開發模式 HTTP smoke 已檢查本站、health 與他站拒絕，尚未涵蓋全部業務流程。
 
 ## Windows 桌面版
