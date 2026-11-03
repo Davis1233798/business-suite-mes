@@ -1,0 +1,25 @@
+services:
+  mes-station:
+    build:
+      context: ../..
+      dockerfile: infra/linux/Dockerfile.station
+    image: business-suite-mes-station:${MES_RELEASE_SHA:?set MES_RELEASE_SHA}
+    restart: unless-stopped
+    environment:
+      SUITE_WEB: /srv/station/web-dist
+      SUITE_DB: /srv/station/data/mes.sqlite
+      SUITE_ADDR: 0.0.0.0:8095
+    ports:
+      - "127.0.0.1:${MES_DEPLOY_PORT:-18095}:8095"
+    volumes:
+      - mes-station-data:/srv/station/data
+    healthcheck:
+      test: ["CMD", "/srv/station/station-server", "--healthcheck"]
+      interval: 10s
+      timeout: 3s
+      retries: 6
+      start_period: 10s
+
+volumes:
+  mes-station-data:
+    name: ${MES_DEPLOY_DATA_VOLUME:-mes-mes-station-data}

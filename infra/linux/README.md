@@ -1,5 +1,21 @@
 # 既有 Linux 主機部署
 
+## MES 單站隔離部署範本
+
+本 repo 新增的 [MES 獨立部署架構](../../docs/deployment/ISOLATED_DEPLOYMENT.md) 及 `compose.mes-isolated.yaml` / `deploy-mes-release.sh` 是單獨的選用流程：專案 `mes`、服務 `mes-station`、volume `mes-mes-station-data`、loopback port 預設 `18095`。它只管理自己的服務，不使用本頁下方共享 `business-suite` project，不切換既有 edge，不接管 DNS。主機先安裝此 repo 的 release archive，再由核准的維運流程執行部署器。
+
+這是獨立服務部署範本，不代表目前已連線或已部署至 OCI。現有 GitHub workflow 只驗證並發布 GHCR image；尚未配置受保護的主機部署環境或 SSH 上傳工作，因此不會在 push 時自動更新主機。
+
+在主機部署前先按架構文件核對 SSH host key、權限、Compose project/volume 名稱及 port。archive 必須位於 `/srv/business-suite-mes/staging/`，呼叫時提供 Git commit SHA 及 archive SHA-256：
+
+```bash
+MES_DEPLOY_ROOT=/srv/business-suite-mes MES_DEPLOY_PORT=18095 \
+  bash infra/linux/deploy-mes-release.sh <40-char-git-sha> <64-char-archive-sha256> \
+  /srv/business-suite-mes/staging/<sha>.tgz
+```
+
+部署器只以 loopback `/api/health` 決定是否切換 `current`，失敗時回復 MES image/config，不刪除 volume；rollback 任一步失敗會以 exit 70 明確要求人工介入。Archive 僅接受普通檔案與目錄，拒絕 symlink、hardlink、特殊項目及路徑穿越。公開 hostname/TLS/反向代理仍需另外核准與外部驗收；本範本不建立或修改公開入口。`bash infra/linux/test-mes-deployment.sh` 會清除它建立的專用測試 Compose project、測試 volume 與唯一 `/tmp` 測試 root，也會驗證惡意 archive 拒絕及舊 image rollback；只能在空白隔離主機/checkout 執行，禁止在正式或共享主機執行。
+
 此服務層供主站與六分站使用；可保留 Workers / D1，或加上正式 Node Web 容器。Node 適配器執行已建置的同一 fetch handler，將 D1 介面接到持久化 SQLite volume，並每分鐘派送 Outbox，不使用 `wrangler dev` 作為生產服務。
 
 `bash linux/apply.sh --web` 部署整套到主機 loopback 8090；設定 MAIN_DOMAIN 與 DNS 後，`--public-web` 使用 Caddy HTTPS 開放主站。私有 gateway 不必另開公開網域。Node Web 為單實例，SQLite 是展示業務資料的權威來源；PostgreSQL 分片儲存新增工業／履約服務資料，既有 D1 資料需另行匯入，不能宣稱已自動遷移。

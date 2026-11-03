@@ -36,6 +36,8 @@ jobs:
           done
           curl --fail --silent http://127.0.0.1:18095/api/health > /dev/null
           test "$(curl --silent -o /dev/null -w '%{http_code}' http://127.0.0.1:18095/erp/login)" = 404
+      - name: Verify isolated deployment and rollback
+        run: bash infra/linux/test-mes-deployment.sh
       - name: Publish MES image on main
         if: github.event_name == 'push' && github.ref == 'refs/heads/main'
         env:
