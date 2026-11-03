@@ -143,6 +143,9 @@ func TestMESFinishedGoodsReleaseReceiptAndClose(t *testing.T) {
 		if json.Unmarshal(w.Body.Bytes(), &frontData) != nil || frontData.Data["finishedGoodsBatches"] != nil {
 			t.Fatalf("finished-goods ledger unexpectedly exposed in front view: %s", w.Body.String())
 		}
+		for _, key := range []string{"finishedGoodsQualityDispositions", "finishedGoodsResolutions", "finishedGoodsInventory", "finishedGoodsReceipts"} {
+			if _, visible := frontData.Data[key]; visible { t.Errorf("finished-goods dataset %s unexpectedly exposed in front view", key) }
+		}
 	}
 	labelPath := "/api/stations/mes/print?kind=mes-finished-goods-label&id=" + batchID
 	label := request(a, "GET", labelPath, nil, admin...)
