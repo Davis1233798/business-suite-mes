@@ -3,7 +3,18 @@ set -Eeuo pipefail
 
 fail() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
 [[ ${EUID:-$(id -u)} -eq 0 ]] || fail 'run as root on the dedicated MES host'
-[[ ! -e /srv/business-suite ]] || fail 'host contains the shared portfolio release root; this is not a dedicated MES host'
+if [[ -e /srv/business-suite ]]; then
+  for account in mes-deploy mes-runtime; do
+    for permission in -r -x; do
+      if runuser -u "$account" -- test "$permission" /srv/business-suite; then
+        fail 'MES account can access shared portfolio data'
+      else
+        result=$?
+        [[ "$result" -eq 1 ]] || fail 'Shared-data isolation probe failed'
+      fi
+    done
+  done
+fi
 
 for account in mes-deploy mes-runtime; do
   getent passwd "$account" >/dev/null || fail "missing account: $account"
