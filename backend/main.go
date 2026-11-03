@@ -27,8 +27,9 @@ var migrations embed.FS
 var sites = []string{"mes", "erp", "pos", "crm", "dining", "shop"}
 
 type App struct {
-	db     *sql.DB
-	assets string
+	db         *sql.DB
+	assets     string
+	labManager *businessLabManager
 }
 type Grant struct {
 	Site    string `json:"site"`
@@ -399,6 +400,7 @@ func (a *App) ServeHTTP(w http.ResponseWriter, r *http.Request) {
 		ok(w, map[string]string{"backend": "go", "status": "ready"})
 	})
 	mux.HandleFunc("/api/auth/{action}", a.auth)
+	mux.HandleFunc("/api/stations/{site}/business-lab", a.businessLabAPI)
 	mux.HandleFunc("/api/stations/{site}/traffic", a.trafficAPI)
 	mux.HandleFunc("/api/stations/{site}/{action}", a.stationAPI)
 	mux.HandleFunc("/api/", func(w http.ResponseWriter, r *http.Request) {
@@ -453,7 +455,11 @@ func main() {
 	if addr == "" {
 		addr = "127.0.0.1:8095"
 	}
-	server := &http.Server{Addr: addr, Handler: &App{db: db, assets: assets}, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 20 * time.Second, WriteTimeout: 30 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16384}
+	labRoot := filepath.Join(filepath.Dir(file), "business-labs")
+	if e = os.MkdirAll(labRoot, 0700); e != nil {
+		log.Fatal(e)
+	}
+	server := &http.Server{Addr: addr, Handler: &App{db: db, assets: assets, labManager: newBusinessLabManager(labRoot, 1)}, ReadHeaderTimeout: 5 * time.Second, ReadTimeout: 20 * time.Second, WriteTimeout: 60 * time.Second, IdleTimeout: 60 * time.Second, MaxHeaderBytes: 16384}
 	listener, e := net.Listen("tcp", addr)
 	if e != nil {
 		log.Fatal(e)
