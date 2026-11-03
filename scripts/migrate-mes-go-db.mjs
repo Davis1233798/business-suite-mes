@@ -166,7 +166,7 @@ function applyTargetSchema(target) {
   // after importing rows, so no source delivery state is replayed.
 }
 
-export function migrate(sourcePath, destinationPath, organizationIds) {
+export function migrate(sourcePath, destinationPath, organizationIds, { afterSnapshot } = {}) {
   if (!Array.isArray(organizationIds) || organizationIds.length === 0 || organizationIds.some(id => typeof id !== 'string' || !id)) {
     throw new Error('Specify one or more exact --organization IDs; wildcard migration is disabled');
   }
@@ -188,20 +188,24 @@ export function migrate(sourcePath, destinationPath, organizationIds) {
     backup = new DatabaseSync(backupPath, { readOnly: true });
     assertSource(backup);
     if (manifestSnapshot(backup) !== before) throw new Error('Consistent backup content does not match source snapshot');
+    // All migration decisions after this point must use the immutable snapshot.
+    // The optional callback is only used by synthetic tests to simulate a
+    // concurrent source change and prove that decisions do not drift to source.
+    afterSnapshot?.();
 
     const marks = selectedOrgIds.map(() => '?').join(',');
-    const existing = new Set(source.prepare(`SELECT id FROM organizations WHERE id IN (${marks})`).all(...selectedOrgIds).map(row => row.id));
+    const existing = new Set(backup.prepare(`SELECT id FROM organizations WHERE id IN (${marks})`).all(...selectedOrgIds).map(row => row.id));
     const missing = selectedOrgIds.filter(id => !existing.has(id));
     if (missing.length) throw new Error(`Selected organization not found: ${missing.join(', ')}`);
     const businessOrgIds = new Set();
     for (const table of MES_TABLES) {
-      for (const row of source.prepare(`SELECT DISTINCT organization_id FROM ${q(table)} WHERE organization_id IN (${marks})`).all(...selectedOrgIds)) businessOrgIds.add(row.organization_id);
+      for (const row of backup.prepare(`SELECT DISTINCT organization_id FROM ${q(table)} WHERE organization_id IN (${marks})`).all(...selectedOrgIds)) businessOrgIds.add(row.organization_id);
     }
-    for (const row of source.prepare(`SELECT DISTINCT a.organization_id FROM station_grants g JOIN station_accounts a ON a.user_id=g.user_id WHERE g.site='mes' AND a.organization_id IN (${marks})`).all(...selectedOrgIds)) businessOrgIds.add(row.organization_id);
+    for (const row of backup.prepare(`SELECT DISTINCT a.organization_id FROM station_grants g JOIN station_accounts a ON a.user_id=g.user_id WHERE g.site='mes' AND a.organization_id IN (${marks})`).all(...selectedOrgIds)) businessOrgIds.add(row.organization_id);
     const noMes = selectedOrgIds.filter(id => !businessOrgIds.has(id));
     if (noMes.length) throw new Error(`Selected tenant has no MES business data or MES identity grant: ${noMes.join(', ')}`);
 
-    const users = identityPlan(source, selectedOrgIds);
+    const users = identityPlan(backup, selectedOrgIds);
     const fd = fs.openSync(stagingPath, 'wx', 0o600); fs.closeSync(fd);
     target = new DatabaseSync(stagingPath);
     applyTargetSchema(target);

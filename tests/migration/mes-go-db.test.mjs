@@ -16,7 +16,7 @@ function temporary(t) {
   return dir;
 }
 
-function makeSharedSource(file, { badReporter = false, pendingOutbox = false, processedOutbox = false, extraMesTable = false, extraVersion = false, populatedErpMapping = false } = {}) {
+function makeSharedSource(file, { badReporter = false, pendingOutbox = false, processedOutbox = false, extraMesTable = false, extraVersion = false, populatedErpMapping = false, tenantBMesGrant = false, wal = false } = {}) {
   const db = new DatabaseSync(file);
   // Match the shared Portfolio Go database bootstrap, including its actual
   // common multi-station schema and migration ledger rather than the standalone
@@ -36,7 +36,9 @@ function makeSharedSource(file, { badReporter = false, pendingOutbox = false, pr
   db.prepare('INSERT INTO memberships(id,organization_id,user_id) VALUES(?,?,?)').run('member-a', 'tenant-a', 'user-a');
   db.prepare('INSERT INTO memberships(id,organization_id,user_id) VALUES(?,?,?)').run('member-b', 'tenant-b', 'user-b');
   db.prepare('INSERT INTO station_accounts(user_id,organization_id,email,password_hash) VALUES(?,?,?,?)').run('user-a', 'tenant-a', 'a@example.test', 'pbkdf2-sha256$test$hash');
+  if (tenantBMesGrant) db.prepare('INSERT INTO station_accounts(user_id,organization_id,email,password_hash) VALUES(?,?,?,?)').run('user-b', 'tenant-b', 'b@example.test', 'pbkdf2-sha256$test$hash-b');
   db.prepare('INSERT INTO station_grants(user_id,site,role,scope) VALUES(?,?,?,?)').run('user-a', 'mes', 'admin', 'back');
+  if (tenantBMesGrant) db.prepare('INSERT INTO station_grants(user_id,site,role,scope) VALUES(?,?,?,?)').run('user-b', 'mes', 'admin', 'back');
   db.prepare('INSERT INTO station_grants(user_id,site,role,scope) VALUES(?,?,?,?)').run('user-a', 'erp', 'admin', 'back');
   db.prepare('INSERT INTO station_sessions(token_hash,user_id,expires_at) VALUES(?,?,?)').run('secret-session-hash', 'user-a', 9999999999999);
   db.prepare('INSERT INTO mes_products(id,organization_id,sku,name) VALUES(?,?,?,?)').run('product-a', 'tenant-a', 'SKU-A', 'Product A');
@@ -61,6 +63,7 @@ function makeSharedSource(file, { badReporter = false, pendingOutbox = false, pr
   if (pendingOutbox) db.prepare('INSERT INTO outbox_events(id,organization_id,event_type,payload) VALUES(?,?,?,?)').run('event-a', 'tenant-a', 'mes.work-order.changed', '{}');
   if (processedOutbox) db.prepare("INSERT INTO outbox_events(id,organization_id,event_type,payload,status) VALUES(?,?,?,?,'processed')").run('event-processed', 'tenant-a', 'shop.paid', '{}');
   if (populatedErpMapping) db.prepare('INSERT INTO mes_erp_product_mappings(id,organization_id,mes_product_id,erp_item_id,warehouse_id,version,is_active) VALUES(?,?,?,?,?,?,?)').run('mapping-a', 'tenant-a', 'product-a', 'erp-item-a', 'warehouse-a', 1, 1);
+  if (wal) db.exec('PRAGMA journal_mode=WAL');
   db.close();
 }
 
@@ -157,4 +160,21 @@ test('refuses populated MES-to-ERP mappings rather than copying cross-station re
   makeSharedSource(source, { populatedErpMapping: true });
   assert.throws(() => migrate(source, destination, ['tenant-a']), /Cross-station MES\/ERP table/);
   assert.equal(fs.existsSync(destination), false);
+});
+
+test('uses only the verified snapshot when the live source changes after snapshot creation', t => {
+  const dir = temporary(t), source = path.join(dir, 'shared.sqlite'), destination = path.join(dir, 'mes.sqlite');
+  makeSharedSource(source, { tenantBMesGrant: true, wal: true });
+  const result = migrate(source, destination, ['tenant-b'], {
+    afterSnapshot() {
+      const changed = new DatabaseSync(source);
+      changed.prepare("UPDATE station_grants SET site='erp' WHERE user_id='user-b' AND site='mes'").run();
+      changed.close();
+    },
+  });
+  assert.deepEqual(result.organizationIds, ['tenant-b']);
+  const db = new DatabaseSync(destination, { readOnly: true });
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM station_grants WHERE user_id='user-b' AND site='mes'").get().n, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM organizations WHERE id='tenant-b'").get().n, 1);
+  db.close();
 });

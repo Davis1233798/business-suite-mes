@@ -6,13 +6,17 @@ switch `SUITE_DB` based only on this document; wait for CI and review.
 
 ## Source and target boundary
 
-The source is the shared Go SQLite database from Portfolio. It is identified by
+The source is the shared Go SQLite database from Portfolio. Keep every writer
+stopped from the final backup through database-path cutover: writes after the
+snapshot are not included and would otherwise be missing from the MES target.
+It is identified by
 `suite_migrations` containing `0003_mes_projection`; only
 `0003_mes_projection`, `0006_mes_finished_goods`, and
 `0007_mes_finished_goods_resolutions` are supported. The shared database does
 not use the standalone MES repo's `mes_repository_schema` marker. The source is
-opened read-only and snapshotted with SQLite `VACUUM INTO`; stop all writers
-first. The original file is never modified. The output must be a new path whose
+opened read-only and snapshotted with SQLite `VACUUM INTO`. All post-snapshot
+tenant and identity decisions use the verified snapshot, not the live source.
+The original file is never modified. The output must be a new path whose
 parent exists. The target schema comes from this MES repository's migrations
 and receives its own `mes_repository_schema` marker.
 
@@ -62,8 +66,9 @@ migrations `0000` through `0009`, including synthetic finished-goods records
 and empty MES/ERP integration tables. Cases cover selected-tenant copying,
 account hashes, MES-only grants and audit, session reset, rebuilt projection,
 non-MES exclusion, no-clobber destinations, unresolved references, outbox
-refusal, cross-tenant identity refusal, cross-station mapping refusal, and
-unsupported markers. No local tests are run during this change.
+refusal, cross-tenant identity refusal, cross-station mapping refusal,
+unsupported markers, and mutation of the live source after snapshot creation.
+No local tests are run during this change.
 
 Passing CI will establish only the synthetic path. It will not certify actual
 source data, a complete application workflow, production downtime, deployment,
