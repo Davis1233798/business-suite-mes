@@ -8,7 +8,7 @@
 
 ## 發布流程與邊界
 
-1. `main` push 的 CI 驗證成功後，將該 commit 的 source archive 與 SHA-256 作為短期 artifact。部署 job 僅在 `MES_DEPLOY_ENABLED=true` 時進入受保護的 `mes-production` GitHub Environment；需在 GitHub 外部設定 required reviewers、專用部署帳號與專屬 SSH secrets。工作流程以預先核對的 known-host key、`StrictHostKeyChecking=yes` 上傳唯一檔名 archive，並提供完整 Git SHA 與 archive SHA-256。部署器拒絕不符合格式的輸入及校驗失敗的 archive。未設定啟用變數或 secrets 時不部署。
+1. `main` push 的 CI 驗證成功後，將該 commit 的 source archive 與 SHA-256 作為短期 artifact。部署 job 僅在 `MES_DEPLOY_ENABLED=true` 時進入 `mes-production` GitHub Environment；需在 GitHub 外部配置專用部署帳號與專屬 SSH secrets。工作流程以預先核對的 known-host key、`StrictHostKeyChecking=yes` 上傳唯一檔名 archive 及部署腳本，並提供完整 Git SHA 與 archive SHA-256。部署器拒絕不符合格式的輸入及校驗失敗的 archive。未設定啟用變數或 secrets 時不部署。
 2. 部署器在 `/srv/business-suite-mes` 下建立唯一本次 release 目錄，將 archive 解壓至其中。`Dockerfile.station` 的 Node build stage 從 archive 中的 `package-lock.json` 與前端來源安裝鎖定依賴並執行 `npm run web:build`。前端輸入包含 `web/`、`public/`、`app/globals.css` 所引用的 `app/suite.css`、`app/expressive.css`，以及 `vendor/shadcn-tailwind-4.13.0.css`；Docker build context 必須保留這些相對路徑。Go build stage 編譯 backend。此 archive 不依賴本機/CI 的 `web-dist` 或 `node_modules`。
 3. 以 `business-suite-mes` Compose project 單獨啟動 `mes-station`；資料 volume 固定為 `business-suite-mes-station-data`。部署器檢查 project 中所有 container，若出現非 MES service 或多個 MES service 即拒絕操作。正式 root 必須由維運預先建立並放置 owner marker；部署器不會自行認領既有目錄。舊服務映像以 digest/tag 保留；部署前記錄舊 release。
 4. 僅以 `http://127.0.0.1:<MES_DEPLOY_PORT>/api/health` 驗證。連續健康檢查成功後才更新 `/srv/business-suite-mes/current` symlink。
@@ -20,7 +20,7 @@ Compose project、volume 與 loopback port 在正式環境不可覆寫；部署�
 
 - Linux 主機已安裝 Docker Engine/Compose v2、Bash、Python 3、`flock`、`sha256sum`、`tar`、`curl`。
 - 維運人員需先建立 `/srv/business-suite-mes`、`releases/`、`staging/`、專用 Unix 部署帳號，以及內容恰為 `business-suite-mes/v1` 的 `.mes-deploy-owner` marker。部署帳號有權管理本機 Docker，並能寫入此 root；不得共用中央站台部署帳號。
-- 專用 GitHub Environment `mes-production` 需設 required reviewers。提供專屬 `MES_DEPLOY_TARGET`、`MES_DEPLOY_KEY`、經帶外核對的 `MES_DEPLOY_HOST_KEY`，及 repository variable `MES_DEPLOY_ENABLED=true`。不得重用中央 `OCI_*` secrets。私鑰/憑證值不得傳給部署腳本參數或輸出到日誌。
+- 專用 GitHub Environment `mes-production` 提供專屬 `MES_DEPLOY_TARGET`、`MES_DEPLOY_KEY`、經帶外核對的 `MES_DEPLOY_HOST_KEY`，及 repository variable `MES_DEPLOY_ENABLED=true`。不得重用中央 `OCI_*` secrets。私鑰/憑證值不得傳給部署腳本參數或輸出到日誌。
 - staging archive 來源只允許受信任 `main` workflow；確認 GitHub Environment 核准者、主機網路政策與 SSH host key 後，才可設定啟用變數。
 - 首次部署前人工確認 release root owner marker、磁碟空間、Docker project/volume 名稱沒有既有衝突，以及 loopback port 空閒。部署器不會清理共享資源或自動建立 owner marker。
 
@@ -38,7 +38,7 @@ MES_DEPLOY_PORT=18095 \
 bash infra/linux/deploy-mes-release.sh <40-char-git-sha> <64-char-archive-sha256> /srv/business-suite-mes/staging/<sha>.tgz
 ```
 
-工作流程中的部署 job 只會在上述 GitHub Environment 和 `MES_DEPLOY_ENABLED=true` 都設定後執行。此 repo 不包含正式主機、secrets、host key 或環境核准者配置；目前不能宣稱自動部署已啟用。
+工作流程中的部署 job 只會在上述 GitHub Environment secrets 和 `MES_DEPLOY_ENABLED=true` 都設定後執行。此 repo 不包含正式主機、secrets 或 host key；目前不能宣稱自動部署已啟用。
 
 ## 驗收與回滾
 

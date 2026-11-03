@@ -14,6 +14,10 @@ required = {
     "pinned SSH host key": "secrets.MES_DEPLOY_HOST_KEY",
     "strict host checking": "StrictHostKeyChecking yes",
     "unique archive upload": "${GITHUB_SHA}-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.tgz",
+    "uploaded deployment script": "deploy-mes-release.sh",
+    "remote script checksum verification": "sha256sum --check --status",
+    "script file execution": "bash '$remote_script'",
+    "closed script stdin": "</dev/null",
     "fixed production root": "MES_DEPLOY_ROOT=/srv/business-suite-mes",
     "fixed MES project": "MES_DEPLOY_PROJECT=business-suite-mes",
     "fixed MES volume": "MES_DEPLOY_DATA_VOLUME=business-suite-mes-station-data",
@@ -26,6 +30,9 @@ for label, value in required.items():
 for forbidden in ("OCI_DEPLOY_KEY", "/srv/business-suite/current", "business-suite-station-data", "ssh-keyscan"):
     if forbidden in deploy:
         raise SystemExit(f"Workflow deploy job references forbidden shared deployment setting: {forbidden}")
+
+if "bash -s" in deploy or "< infra/linux/deploy-mes-release.sh" in deploy:
+    raise SystemExit("Deployment script must be uploaded, checksum-verified, and executed as a file with stdin closed")
 
 for value in ("business-suite-mes/v1", "business-suite-mes-station-data", "MES_DEPLOY_ENABLED=true", "mes-production"):
     if value not in docs:
