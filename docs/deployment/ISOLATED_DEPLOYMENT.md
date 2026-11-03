@@ -9,7 +9,7 @@
 ## 發布流程與邊界
 
 1. CI 或發行者將 repo archive 上傳到主機指定 staging 目錄，並提供完整 Git SHA 與 archive SHA-256。部署器拒絕不符合格式的輸入及校驗失敗的 archive。
-2. 部署器在 `/srv/business-suite-mes` 下建立唯一本次 release 目錄，將 archive 解壓至其中。`Dockerfile.station` 的 Node build stage 從 archive 中的 `package-lock.json` 與 `web/` 原始碼安裝鎖定依賴並執行 `npm run web:build`，Go build stage 編譯 backend；因此 archive 不依賴本機/CI 的 `web-dist` 或 `node_modules`。
+2. 部署器在 `/srv/business-suite-mes` 下建立唯一本次 release 目錄，將 archive 解壓至其中。`Dockerfile.station` 的 Node build stage 從 archive 中的 `package-lock.json` 與前端來源安裝鎖定依賴並執行 `npm run web:build`。前端輸入包含 `web/`、`public/`、`app/globals.css` 所引用的 `app/suite.css`、`app/expressive.css`，以及 `vendor/shadcn-tailwind-4.13.0.css`；Docker build context 必須保留這些相對路徑。Go build stage 編譯 backend。此 archive 不依賴本機/CI 的 `web-dist` 或 `node_modules`。
 3. 以 `mes` Compose project 單獨啟動 `mes-station`；資料 volume 固定為 `mes-mes-station-data`。舊服務映像以 digest/tag 保留；部署前記錄舊 release。
 4. 僅以 `http://127.0.0.1:<MES_DEPLOY_PORT>/api/health` 驗證。連續健康檢查成功後才更新 `/srv/business-suite-mes/current` symlink。
 5. 建置、啟動或健康檢查失敗時，僅用 MES 專案回復先前映像/設定並重新等待 health。資料 volume 不刪除、不回復舊快照；資料 schema migration 若不可逆，不在本範本支援範圍，必須另備升級與恢復設計。
@@ -39,7 +39,7 @@ bash infra/linux/deploy-mes-release.sh <40-char-git-sha> <64-char-archive-sha256
 
 ## 驗收與回滾
 
-由維運人員在專用 staging/測試主機執行 `bash infra/linux/test-mes-deployment.sh`。腳本會用 `git archive` 建立不含 `web-dist` 的真實 source archive，檢查其中有前端 source/lockfile，再以該 archive 驗證 Compose build、啟動與 health；確認資料持久性，並以獨立探針確認名稱/volume 隔離。它還會在唯一 `/tmp` 部署 root 下確認 symlink、hardlink、FIFO 與路徑穿越 archive 被拒絕，並注入必然失敗的 healthcheck 以驗證舊 image、health endpoint 與 `current` release 還原。完成後只清理它建立的測試容器、volume 與唯一測試 root。禁止在共享/正式主機執行此清理測試。
+由維運人員在專用 staging/測試主機執行 `bash infra/linux/test-mes-deployment.sh`。腳本會用 `git archive` 建立不含 `web-dist` 的真實 source archive，檢查 lockfile、前端 source 及其共用 CSS 相依檔均在 archive，再以該 archive 驗證 Compose build、啟動與 health；確認資料持久性，並以獨立探針確認名稱/volume 隔離。它還會在唯一 `/tmp` 部署 root 下確認 symlink、hardlink、FIFO 與路徑穿越 archive 被拒絕，並注入必然失敗的 healthcheck 以驗證舊 image、health endpoint 與 `current` release 還原。完成後只清理它建立的測試容器、volume 與唯一測試 root。禁止在共享/正式主機執行此清理測試。
 
 Archive 抽取先完整檢查成員名稱，只接受普通檔案和目錄，拒絕連結與特殊檔案，再逐檔寫入唯一暫存 release 目錄；驗證完成後才原子移入正式 releases 目錄。Rollback 各步驟與健康檢查均需成功；任何一步失敗會以 exit 70 明確報告 rollback incomplete，要求人工介入，不會把失敗吞掉。
 
