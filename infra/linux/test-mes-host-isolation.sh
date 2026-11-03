@@ -2,7 +2,7 @@
 set -Eeuo pipefail
 
 fail() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
-[[ ${EUID:-$(id -u)} -eq 0 ]] || fail 'run as root on the dedicated MES host'
+[[ ${EUID:-$(id -u)} -eq 0 ]] || fail 'run as root on the target OCI host'
 if [[ -e /srv/business-suite ]]; then
   for account in mes-deploy mes-runtime; do
     for permission in -r -x; do
@@ -66,4 +66,4 @@ grep -Fq 'kbdinteractiveauthentication no' <<<"$effective" || fail 'SSH keyboard
 grep -Fq 'authenticationmethods publickey' <<<"$effective" || fail 'SSH must require public-key authentication'
 
 sudo -n "$gateway" status >/dev/null || fail 'forced-command gateway health/isolation status check failed'
-printf 'PASS: dedicated MES host uses rootless Docker; deploy key reaches only the fixed gateway and cannot access the rootful daemon.\n'
+printf 'PASS: MES uses rootless Docker with audited account and data boundaries; deploy key reaches only the fixed gateway.\n'

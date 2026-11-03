@@ -47,6 +47,17 @@ class GatewayArchiveTests(unittest.TestCase):
             with mock.patch.object(gateway, 'SHARED_ROOT', shared), mock.patch.object(gateway.subprocess, 'run', return_value=SimpleNamespace(returncode=0)):
                 with self.assertRaises(gateway.GatewayError):
                     gateway.assert_shared_tree_inaccessible(accounts)
+            with mock.patch.object(gateway, 'SHARED_ROOT', shared), mock.patch.object(gateway.subprocess, 'run', return_value=SimpleNamespace(returncode=2)):
+                with self.assertRaises(gateway.GatewayError):
+                    gateway.assert_shared_tree_inaccessible(accounts)
+
+    def test_shared_oci_tree_may_be_absent(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            shared = Path(temporary) / 'not-created'
+            accounts = [SimpleNamespace(pw_name='mes-deploy'), SimpleNamespace(pw_name='mes-runtime')]
+            with mock.patch.object(gateway, 'SHARED_ROOT', shared), mock.patch.object(gateway.subprocess, 'run') as probe:
+                gateway.assert_shared_tree_inaccessible(accounts)
+                probe.assert_not_called()
 
     def test_regular_helper_is_extracted_exactly(self):
         payload = b'#!/bin/bash\nexit 0\n'

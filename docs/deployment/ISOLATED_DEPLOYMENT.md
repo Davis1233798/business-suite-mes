@@ -8,11 +8,11 @@
 
 本次只部署此 repo 的 Go 工作站映像；它用自己的 SQLite volume。Vinext/Cloudflare Workers、D1 資料庫與既有展示資料不會自動遷移或共用。MES 根 hostname/DNS/Caddy 設定由維運人員另行審核；此部署器只在明確設定的 loopback port 提供 upstream，預設不建立公開入口。
 
-## 跨主機路由限制
+## 跨 daemon 路由限制
 
 Profolio PR17 的 MES Caddy route 連到 rootful Docker network `business-suite-mes_default`。本方案使用同一 OCI host 上獨立的 rootless daemon；兩個 daemon 的 network namespace 不相通，Caddy 不能用 Docker service name `mes-station` 到達它。`127.0.0.1:18095` 是 OCI host loopback upstream；需在 Profolio IaC 另行配置 Caddy 到 host loopback 的受控連線及來源限制，再驗證端到端健康與授權。
 
-本 PR 部署至既有 OCI 主機，但不完成公開 hostname cutover；不可執行依賴 rootful Docker network `business-suite-mes_default` 的 Profolio `cutover-mes-public-route.sh` 來宣稱路由已切換。rootless daemon 的 network namespace 與 rootful daemon 分開，Caddy 不能透過該 Docker service name 到達 MES。若要公開化，需先在 Profolio repo 設計受控的主機內或私網 upstream，限制來源並完成端到端 health/授權驗收。不得為了接通而把 MES 加回中央 rootful Docker daemon、共用 Docker group 或共用資料 volume。
+部署目標是既有 OCI 主機；本 PR 不執行部署，也不完成公開 hostname cutover。不可執行依賴 rootful Docker network `business-suite-mes_default` 的 Profolio `cutover-mes-public-route.sh` 來宣稱路由已切換。rootless daemon 的 network namespace 與 rootful daemon 分開，Caddy 不能透過該 Docker service name 到達 MES。若要公開化，需先在 Profolio repo 實作受控 host proxy／Unix socket upstream，限制來源並完成端到端 health/授權驗收。不得為了接通而把 MES 加回中央 rootful Docker daemon、共用 Docker group 或共用資料 volume。
 
 ## 發布流程與邊界
 
@@ -22,7 +22,7 @@ Profolio PR17 的 MES Caddy route 連到 rootful Docker network `business-suite-
 4. 僅以 `http://127.0.0.1:<MES_DEPLOY_PORT>/api/health` 驗證。連續健康檢查成功後才更新 `/srv/business-suite-mes/current` symlink。
 5. 建置、啟動或健康檢查失敗時，僅用 MES 專案回復先前映像/設定並重新等待 health。資料 volume 不刪除、不回復舊快照；資料 schema migration 若不可逆，不在本範本支援範圍，必須另備升級與恢復設計。
 
-Compose project、volume 與 loopback port 在正式環境不可覆寫；部署前須確認 port 未被占用且 Docker 名稱沒有外站資源衝突。此 port 不應直接開放公網。中央 Caddy 容器目前無法透過 rootful Docker network 直接連入 rootless network；需透過 host gateway 到 `127.0.0.1:18095` 並限制可達來源。這項 Caddy upstream/IaC 變更不在本部署器範圍內。部署 job 不建立 DNS、TLS、Caddy route 或公開 ingress。
+Compose project、volume 與 loopback port 在正式環境不可覆寫；部署前須確認 port 未被占用且 Docker 名稱沒有外站資源衝突。此 port 不應直接開放公網。中央 Caddy 容器目前無法透過 rootful Docker network 直接連入 rootless network；Profolio IaC 須另行實作受控 host proxy／Unix socket upstream 並限制可達來源。這項 Caddy upstream/IaC 變更不在本部署器範圍內。部署 job 不建立 DNS、TLS、Caddy route 或公開 ingress。
 
 ## 主機前置條件及權限
 
@@ -46,7 +46,7 @@ sudo chmod 0444 /srv/business-suite-mes/.mes-deploy-owner
 sudo -u mes-runtime env XDG_RUNTIME_DIR=/run/user/"$(id -u mes-runtime)" DOCKER_HOST=unix:///run/user/"$(id -u mes-runtime)"/docker.sock docker info --format '{{json .SecurityOptions}}'
 ```
 
-Gateway 檔案請安裝為 `root:root` mode `0750`，sudoers 檔案 `root:root` mode `0440`。Forced command 會用 sudo 把原始 SSH 命令作單一參數傳給 gateway；不允許 scp/SFTP 或遠端 shell。Deploy public key 與 `mes-deploy` 帳號設定只由維運人員透過 host provisioning 完成。可用下列命令部署並檢查程式檔案；實際 host 變更需在專用主機維護流程內執行：
+Gateway 檔案請安裝為 `root:root` mode `0750`，sudoers 檔案 `root:root` mode `0440`。Forced command 會用 sudo 把原始 SSH 命令作單一參數傳給 gateway；不允許 scp/SFTP 或遠端 shell。Deploy public key 與 `mes-deploy` 帳號設定只由維運人員透過 host provisioning 完成。可用下列命令部署並檢查程式檔案；實際 host 變更需在既有 OCI host 維護流程內執行：
 
 ```bash
 sudo install -o root -g root -m 0750 infra/linux/mes-deploy-gateway.py /usr/local/sbin/mes-deploy-gateway
