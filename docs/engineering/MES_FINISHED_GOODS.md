@@ -18,7 +18,7 @@ Only the MES finished-goods handler may change these tables. Each command is one
 
 Batch creation must bind a completed MES work order and its production report; aggregate batches cannot exceed the report's good quantity. Inspection disposition must reference matching MES quality evidence and account for the batch quantity. Quarantine blocks receipt until a reasoned rework or scrap resolution. Rework requires a later inspection. Receipt is allowed only for a fully released batch and creates MES receipt/inventory plus `mes.finished_goods.received` outbox event. Work-order close requires all target quantity accounted for as received good quantity or scrapped output, with no unresolved batches.
 
-Read data extends `GET /api/stations/mes/data` with batches, quality dispositions, inventory, receipts, and resolutions. The UI displays these datasets and actions; only administrators get enabled mutation controls. Existing operators continue to use the production/report and quality-check endpoints; this implementation will include the minimal MES report/inspection routes required by the finished-goods screen if those are absent in this base.
+Read data extends `GET /api/stations/mes/data` with batches, quality dispositions, inventory, receipts, and resolutions. The UI displays these datasets and actions; only administrators get enabled mutation controls. The existing MES production endpoint supplies report records; the port adds `/api/stations/mes/operations` for MES quality-check evidence used by batch disposition.
 
 ## Acceptance tests (write before implementation)
 

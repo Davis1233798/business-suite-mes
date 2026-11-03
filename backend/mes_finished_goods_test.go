@@ -86,6 +86,26 @@ func TestMESFinishedGoodsReleaseReceiptAndClose(t *testing.T) {
 		t.Fatalf("unexpected batch result: err=%v body=%s", err, created.Body.String())
 	}
 	batchID := batchResult.Data.BatchID
+	var workspaceData struct {
+		Data map[string][]map[string]any `json:"data"`
+	}
+	if w := request(a, http.MethodGet, "/api/stations/mes/data", nil, admin...); w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &workspaceData) != nil || len(workspaceData.Data["finishedGoodsBatches"]) != 1 {
+		t.Fatalf("MES back-office data did not expose its tenant batches: %d %s", w.Code, w.Body.String())
+	}
+	var foreignData struct {
+		Data map[string][]map[string]any `json:"data"`
+	}
+	if w := request(a, http.MethodGet, "/api/stations/mes/data", nil, foreign...); w.Code != http.StatusOK || json.Unmarshal(w.Body.Bytes(), &foreignData) != nil || len(foreignData.Data["finishedGoodsBatches"]) != 0 {
+		t.Fatalf("foreign tenant saw MES batches: %d %s", w.Code, w.Body.String())
+	}
+	if w := request(a, http.MethodGet, "/api/stations/mes/data?view=front", nil, operator...); w.Code != http.StatusOK {
+		t.Fatalf("front data query: %d %s", w.Code, w.Body.String())
+	} else {
+		var frontData struct{ Data map[string][]map[string]any `json:"data"` }
+		if json.Unmarshal(w.Body.Bytes(), &frontData) != nil || frontData.Data["finishedGoodsBatches"] != nil {
+			t.Fatalf("finished-goods ledger unexpectedly exposed in front view: %s", w.Body.String())
+		}
+	}
 	labelPath := "/api/stations/mes/print?kind=mes-finished-goods-label&id=" + batchID
 	label := request(a, "GET", labelPath, nil, admin...)
 	var labelData struct {

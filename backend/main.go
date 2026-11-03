@@ -138,6 +138,9 @@ func openDB(file string) (*sql.DB, error) {
 			return nil, fmt.Errorf("migration %s: %w", f, err)
 		}
 	}
+	if e = upgradeMESFinishedGoodsColumns(tx); e != nil {
+		return nil, e
+	}
 	if _, e = tx.Exec("CREATE TABLE IF NOT EXISTS mes_repository_schema (version INTEGER NOT NULL); INSERT INTO mes_repository_schema(version) SELECT 1 WHERE NOT EXISTS (SELECT 1 FROM mes_repository_schema)"); e != nil {
 		return nil, e
 	}
