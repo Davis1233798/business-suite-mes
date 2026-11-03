@@ -217,7 +217,7 @@ def deploy(sha, expected):
     assert_root_inbox()
     fd, archive_name = tempfile.mkstemp(prefix=f"{sha}-", suffix=".tgz", dir=INBOX)
     runtime_account = pwd.getpwnam("mes-runtime")
-    os.fchown(fd, runtime_account.pw_uid, runtime_account.pw_gid)
+    os.fchown(fd, 0, runtime_account.pw_gid)
     os.fchmod(fd, 0o640)
     digest = hashlib.sha256()
     size = 0

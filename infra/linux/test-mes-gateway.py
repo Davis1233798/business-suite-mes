@@ -152,6 +152,7 @@ class GatewayArchiveTests(unittest.TestCase):
             return subprocess.CompletedProcess([], 0)
 
         account = types.SimpleNamespace(pw_uid=os.getuid(), pw_gid=os.getgid(), pw_name='mes-runtime')
+        fchown = mock.Mock()
         stdin = types.SimpleNamespace(buffer=io.BytesIO(data))
         patches = [
             mock.patch.object(gateway, 'INBOX', inbox),
@@ -163,7 +164,7 @@ class GatewayArchiveTests(unittest.TestCase):
             mock.patch.object(gateway, 'runtime_context', return_value=(account, {})),
             mock.patch.object(gateway.pwd, 'getpwnam', return_value=account),
             mock.patch.object(gateway.os, 'open', side_effect=fixture_open),
-            mock.patch.object(gateway.os, 'fchown'),
+            mock.patch.object(gateway.os, 'fchown', side_effect=fchown),
             mock.patch.object(gateway.os, 'fchmod'),
             mock.patch.object(gateway.fcntl, 'flock'),
             mock.patch.object(gateway.subprocess, 'run', side_effect=fake_run),
@@ -182,6 +183,7 @@ class GatewayArchiveTests(unittest.TestCase):
                     gateway.deploy('a' * 40, expected)
             else:
                 gateway.deploy('a' * 40, expected)
+        self.assertEqual(fchown.call_args.args[1:], (0, os.getgid()))
         return inbox, staging, handoffs
 
     def test_deploy_hash_mismatch_cleans_only_root_inbox_without_handoff(self):
