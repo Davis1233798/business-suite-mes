@@ -32,6 +32,8 @@
 
 ## MES
 
+Go station additionally exposes `POST /api/stations/mes/business` for `start` and `report` actions. Both use the authenticated MES grant and organization scope; `start` requires a back-office write-enabled grant, while `report` rejects readonly accounts. Reports are atomic with work-order quantity, report, audit and projection updates. `idempotencyKey` (8–128 chars) replays the original response only when the request payload is identical; reusing it with changed data returns 409. `POST /api/stations/mes/business-lab` accepts `{"contenders":2..32}` for an MES back-office admin/operator. It races real report requests in a disposable isolated database and removes that database after reconciling the result. One run per server process is allowed; the measured rate is not a capacity promise.
+
 `POST /api/operations/mes` 以 `action` 分派：
 
 | action | JSON 欄位 |

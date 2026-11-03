@@ -1,0 +1,16 @@
+.mes-business-lab{margin:20px 0;padding:22px;background:#fff;border:1px solid #d9dfe5;border-left:4px solid #1264a3;border-radius:6px;color:#243443}
+.mes-business-lab>header{display:flex;justify-content:space-between;gap:18px;align-items:flex-start}
+.mes-business-lab h2{font-size:20px;margin:4px 0 8px}
+.mes-business-lab header p:not(.eyebrow){max-width:760px;margin:0}
+.mes-business-lab header>span{white-space:nowrap;padding:7px 10px;border-radius:20px;background:#eef3f7;color:#526576;font-size:12px}
+.mes-business-lab header>span.is-running{background:#fff2d6;color:#895a00}
+.mes-business-controls{display:flex;align-items:end;gap:12px;flex-wrap:wrap;margin-top:18px}
+.mes-business-controls label{min-width:180px}
+.mes-business-controls small{flex-basis:100%}
+.mes-business-evidence{display:grid;grid-template-columns:minmax(240px,1fr) minmax(280px,1.2fr);gap:20px;margin-top:20px;padding-top:18px;border-top:1px solid #e5e9ed}
+.mes-business-evidence h3{margin:5px 0 10px}
+.mes-business-evidence dl{display:grid;grid-template-columns:repeat(2,minmax(120px,1fr));gap:8px;margin:0}
+.mes-business-evidence dl div{padding:10px;background:#f4f7fa;border-radius:4px}
+.mes-business-evidence dt{font-size:11px;color:#526576}
+.mes-business-evidence dd{margin:4px 0 0;font-size:18px;font-weight:650}
+@media(max-width:700px){.mes-business-lab>header{display:block}.mes-business-lab header>span{display:inline-block;margin-top:12px}.mes-business-evidence{grid-template-columns:1fr}.mes-business-controls{align-items:stretch;flex-direction:column}.mes-business-controls label{min-width:0}}
