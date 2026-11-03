@@ -1,4 +1,6 @@
 from pathlib import Path
+import subprocess
+import tempfile
 
 
 workflow = Path(".github/workflows/mes.yml").read_text()
@@ -23,6 +25,7 @@ required = {
     "fixed MES project": "MES_DEPLOY_PROJECT=business-suite-mes",
     "fixed MES volume": "MES_DEPLOY_DATA_VOLUME=business-suite-mes-station-data",
     "fixed loopback port": "MES_DEPLOY_PORT=18095",
+    "checksum generated relative to artifact directory": "(cd deploy-artifact && sha256sum mes-source.tgz > mes-source.tgz.sha256)",
 }
 for label, value in required.items():
     if value not in deploy:
@@ -46,5 +49,16 @@ for value in ("Production project, data volume, and port are fixed", "unexpected
 for value in ("compose_volume_matches", "A missed volume substitution passed the compose isolation guard", "Refusing cleanup of non-test volume", "Refusing cleanup: test project or effective volume"):
     if value not in acceptance:
         raise SystemExit(f"Remote acceptance is missing test-volume safety coverage: {value}")
+
+# Exercise the exact artifact-relative checksum round trip used by the workflow.
+with tempfile.TemporaryDirectory(prefix="mes-artifact-checksum-") as temporary:
+    artifact_dir = Path(temporary) / "deploy-artifact"
+    artifact_dir.mkdir()
+    archive = artifact_dir / "mes-source.tgz"
+    checksum = artifact_dir / "mes-source.tgz.sha256"
+    archive.write_bytes(b"MES source archive checksum round-trip fixture\n")
+    with checksum.open("wb") as output:
+        subprocess.run(["sha256sum", "mes-source.tgz"], cwd=artifact_dir, check=True, stdout=output)
+    subprocess.run(["sha256sum", "--check", "mes-source.tgz.sha256"], cwd=artifact_dir, check=True)
 
 print("MES deployment workflow and isolation contract passed.")
