@@ -4,6 +4,9 @@ import tempfile
 
 
 workflow = Path(".github/workflows/mes.yml").read_text()
+windows_desktop = workflow.split("\n  windows-desktop:\n", 1)[1].split("\n  mes:\n", 1)[0]
+mes = workflow.split("\n  mes:\n", 1)[1].split("\n  release:\n", 1)[0]
+release = workflow.split("\n  release:\n", 1)[1].split("\n  deploy:\n", 1)[0]
 deploy = workflow.split("\n  deploy:\n", 1)[1]
 script = Path("infra/linux/deploy-mes-release.sh").read_text()
 docs = Path("docs/deployment/ISOLATED_DEPLOYMENT.md").read_text()
@@ -57,6 +60,27 @@ for label, value in required.items():
 
 if "(cd deploy-artifact && sha256sum mes-source.tgz > mes-source.tgz.sha256)" not in workflow:
     raise SystemExit("Workflow must create the artifact checksum relative to its upload directory")
+
+if "needs: mes" not in windows_desktop:
+    raise SystemExit("Windows packaging must wait for MES validation before uploading its desktop artifact")
+windows_steps = ["node --test tests/desktop-identity.test.cjs", "npm run desktop:prepare", "npm run desktop:package", "actions/upload-artifact@v4"]
+windows_positions = [windows_desktop.find(step) for step in windows_steps]
+if any(position < 0 for position in windows_positions) or windows_positions != sorted(windows_positions):
+    raise SystemExit("Windows identity checks and packaging must pass before uploading its desktop artifact")
+if "needs: [mes, windows-desktop]" not in release:
+    raise SystemExit("Release artifacts and image publication must wait for MES and Windows desktop validation")
+if "if: github.event_name == 'push' && github.ref == 'refs/heads/main'" not in release:
+    raise SystemExit("Release artifacts and image publication must be main-push only")
+if "Package exact main source for deployment" not in release or "actions/upload-artifact@v4" not in release:
+    raise SystemExit("Main source artifact must be created and uploaded in the gated release job")
+if "Publish MES image after all platform builds" not in release or "docker push \"$image:${GITHUB_SHA}\"" not in release:
+    raise SystemExit("MES image publication must be gated on both platform validation jobs")
+if "if: always()" in release or "if: always()" in windows_desktop:
+    raise SystemExit("Release and Windows build artifacts must not be uploaded after failed dependencies or steps")
+if "actions/upload-artifact@v4" in mes:
+    raise SystemExit("Deployable source artifacts must not be uploaded by the ungated MES validation job")
+if "needs: [mes, windows-desktop, release]" not in deploy:
+    raise SystemExit("Deployment must depend on MES, Windows desktop, and the gated release artifact")
 
 for forbidden in ("OCI_DEPLOY_KEY", "/srv/business-suite/current", "business-suite-station-data", "ssh-keyscan"):
     if forbidden in deploy:
