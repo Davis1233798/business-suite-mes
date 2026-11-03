@@ -112,6 +112,11 @@ docker compose --project-name "$probe_project" --file "$probe_file" down --volum
 # Exercise archive type rejection and release rollback using a private /tmp root and unique Compose names.
 mkdir -p "$deploy_root/staging" "$deploy_root/payload"
 git archive --format=tar HEAD | gzip -n >"$deploy_archive"
+tar --list --gzip --file "$deploy_archive" | grep -Fx 'web/src/main.tsx' >/dev/null
+tar --list --gzip --file "$deploy_archive" | grep -Fx 'package-lock.json' >/dev/null
+if tar --list --gzip --file "$deploy_archive" | grep -Eq '(^|/)web-dist/'; then
+  echo 'Deployment archive unexpectedly depends on generated web-dist output' >&2; exit 1
+fi
 deploy_sha=$(printf '%s' "$sha" | sha256sum | cut -c1-40)
 deploy_digest=$(sha256sum "$deploy_archive" | cut -d' ' -f1)
 if [[ -e "$deploy_root/current" || -e "$deploy_root/releases/$deploy_sha" ]]; then echo 'Unexpected test deploy state' >&2; exit 1; fi

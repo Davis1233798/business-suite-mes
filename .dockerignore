@@ -1,0 +1,16 @@
+.git
+.wrangler
+.data
+node_modules
+**/node_modules
+dist
+web-dist
+backend/.data
+desktop/node_modules
+*.sqlite
+*.sqlite3
+*.sqlite-*
+*.sqlite3-*
+*.db
+*.db-wal
+*.db-shm
