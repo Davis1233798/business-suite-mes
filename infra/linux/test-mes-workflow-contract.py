@@ -86,7 +86,7 @@ for forbidden in ("OCI_DEPLOY_KEY", "/srv/business-suite/current", "business-sui
     if forbidden in deploy:
         raise SystemExit(f"Workflow deploy job references forbidden shared deployment setting: {forbidden}")
 
-if "SSH_ORIGINAL_COMMAND" not in ssh_policy or "runuser -u mes-runtime" not in gateway:
+if "SSH_ORIGINAL_COMMAND" not in ssh_policy or 'pwd.getpwnam("mes-runtime")' not in gateway or "/usr/sbin/runuser" not in gateway:
     raise SystemExit("Forced-command gateway must validate SSH commands and run deployment as mes-runtime")
 if "docker info" not in gateway or "rootless" not in gateway:
     raise SystemExit("Forced-command gateway must require the mes-runtime rootless Docker daemon")
