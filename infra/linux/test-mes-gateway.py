@@ -9,6 +9,7 @@ import types
 import tarfile
 import tempfile
 import unittest
+from types import SimpleNamespace
 from unittest import mock
 
 spec = importlib.util.spec_from_file_location('gateway', Path(__file__).with_name('mes-deploy-gateway.py'))
@@ -35,6 +36,17 @@ class GatewayArchiveTests(unittest.TestCase):
                 with self.assertRaises(gateway.GatewayError):
                     gateway.main()
                 boundary.assert_not_called()
+
+    def test_shared_oci_tree_requires_denied_runtime_access(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            shared = Path(temporary)
+            accounts = [SimpleNamespace(pw_name='mes-deploy'), SimpleNamespace(pw_name='mes-runtime')]
+            with mock.patch.object(gateway, 'SHARED_ROOT', shared), mock.patch.object(gateway.subprocess, 'run', return_value=SimpleNamespace(returncode=1)) as probe:
+                gateway.assert_shared_tree_inaccessible(accounts)
+                self.assertEqual(probe.call_count, 4)
+            with mock.patch.object(gateway, 'SHARED_ROOT', shared), mock.patch.object(gateway.subprocess, 'run', return_value=SimpleNamespace(returncode=0)):
+                with self.assertRaises(gateway.GatewayError):
+                    gateway.assert_shared_tree_inaccessible(accounts)
 
     def test_regular_helper_is_extracted_exactly(self):
         payload = b'#!/bin/bash\nexit 0\n'
