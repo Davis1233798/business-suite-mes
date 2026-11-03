@@ -95,6 +95,11 @@ if '"$root" == /srv/business-suite-mes' not in script or "MES_REQUIRE_ROOTLESS_D
 for value in ("status", "deploy", "MAX_ARCHIVE", "sha256", "runuser", 'PORT = "18095"', 'f"127.0.0.1:{PORT}"', "business-suite-mes/v1"):
     if value not in gateway:
         raise SystemExit(f"Forced-command gateway is missing validation: {value}")
+for value in ("INBOX = Path(\"/run/mes-deploy-inbox\")", "assert_root_inbox()", 'runtime("/usr/bin/mv", "--", archive_name, str(delivered))'):
+    if value not in gateway:
+        raise SystemExit(f"Gateway staging handoff is missing {value}")
+if "mkstemp(prefix=f\"{sha}-\", suffix=\".tgz\", dir=STAGING)" in gateway:
+    raise SystemExit("Root gateway must not create files under runtime-owned staging ancestry")
 if "SSH_ORIGINAL_COMMAND" not in ssh_policy or "ForceCommand" not in ssh_policy or "DisableForwarding yes" not in ssh_policy or "AllowStreamLocalForwarding no" not in ssh_policy:
     raise SystemExit("SSH policy must route all MES deploy logins through the fixed gateway")
 if "mes-deploy ALL=(root) NOPASSWD: /usr/local/sbin/mes-deploy-gateway" not in sudo_policy:
@@ -108,7 +113,7 @@ for value in ("/var/run/docker.sock", "privileged: true", "network_mode: host"):
     if value in compose:
         raise SystemExit(f"MES Compose contract contains a forbidden host escape: {value}")
 
-for value in ("business-suite-mes/v1", "business-suite-mes-station-data", "MES_DEPLOY_ENABLED=true", "mes-production", "rootless", "ForceCommand", "business-suite-mes_default", "跨主機", "mTLS", "不完成公開 hostname cutover"):
+for value in ("business-suite-mes/v1", "business-suite-mes-station-data", "MES_DEPLOY_ENABLED=true", "mes-production", "rootless", "ForceCommand", "business-suite-mes_default", "跨主機", "mTLS", "不完成公開 hostname cutover", "/run/mes-deploy-inbox"):
     if value not in docs:
         raise SystemExit(f"Deployment boundary documentation is missing: {value}")
 

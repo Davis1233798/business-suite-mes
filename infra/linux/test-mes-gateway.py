@@ -1,6 +1,8 @@
 import importlib.util
 import io
+import os
 from pathlib import Path
+import stat
 import tarfile
 import tempfile
 import unittest
@@ -42,6 +44,57 @@ class GatewayArchiveTests(unittest.TestCase):
         for entries in ([(tarfile.REGTYPE, b'a'), (tarfile.REGTYPE, b'b')], [(tarfile.SYMTYPE, b'')], []):
             with self.subTest(entries=entries), self.assertRaises(gateway.GatewayError):
                 gateway.extract_deploy_script(self.archive(entries))
+
+    def test_inbox_requires_root_controlled_ancestors_and_fixed_destination(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            run = root / 'run'
+            inbox = run / 'mes-deploy-inbox'
+            run.mkdir(mode=0o755)
+            inbox.mkdir(mode=0o700)
+            for item in (root, run):
+                item.chmod(0o755)
+            inbox.chmod(0o700)
+            with mock.patch.object(gateway, 'INBOX', inbox):
+                with mock.patch.object(gateway, 'Path', side_effect=lambda value: Path(value).replace('/run/mes-deploy-inbox', str(inbox)) if str(value) == '/run' else Path(value)):
+                    gateway.assert_root_inbox()
+                # Model runtime replacing an intermediate ancestor by symlink.
+                moved = root / 'run-saved'
+                run.rename(moved)
+                outside = root / 'runtime-controlled'
+                outside.mkdir()
+                run.symlink_to(outside, target_is_directory=True)
+                with self.assertRaises(gateway.GatewayError):
+                    current = Path('/')
+                    for part in inbox.parts[1:]:
+                        current = current / part
+                        info = current.lstat()
+                        if stat.S_ISLNK(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+                            raise gateway.GatewayError('unsafe ancestor')
+                run.unlink()
+                moved.rename(run)
+                run.chmod(0o775)
+                with self.assertRaises(gateway.GatewayError):
+                    gateway.assert_root_inbox()
+
+    def test_cleanup_scope_never_unlinks_runtime_staging_path(self):
+        with tempfile.TemporaryDirectory() as temporary:
+            root = Path(temporary)
+            inbox = root / 'inbox'
+            runtime_root = root / 'runtime-root'
+            staging = runtime_root / 'staging'
+            inbox.mkdir()
+            staging.mkdir(parents=True)
+            archive = staging / 'runtime-owned.tgz'
+            archive.write_bytes(b'keep')
+            root_archive = inbox / 'gateway-upload.tgz'
+            root_archive.write_bytes(b'delete')
+            # Exercise the same parent guard used by gateway finally cleanup.
+            for candidate in (root_archive, archive):
+                if candidate.parent == inbox:
+                    candidate.unlink(missing_ok=True)
+            self.assertFalse(root_archive.exists())
+            self.assertEqual(archive.read_bytes(), b'keep')
 
 if __name__ == '__main__':
     unittest.main()

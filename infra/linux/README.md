@@ -12,7 +12,7 @@
 sudo bash infra/linux/test-mes-host-isolation.sh
 ```
 
-自動部署流程透過 SSH stdin 傳送 artifact，只接受固定 `status` 和 `deploy <sha> <digest>` 命令；不使用 SCP/SFTP，不上傳或遠端執行 workflow 提供的 shell script。部署器只以 loopback `/api/health` 決定是否切換 `current`，失敗時回復 MES image/config，不刪除 volume；rollback 任一步失敗會以 exit 70 明確要求人工介入。Archive 僅接受普通檔案與目錄，拒絕 symlink、hardlink、特殊項目及路徑穿越。公開 hostname/TLS/反向代理仍需另外核准與外部驗收；本範本不建立或修改公開入口。`bash infra/linux/test-mes-deployment.sh` 會清除它建立的專用測試 Compose project、測試 volume 與唯一 `/tmp` 測試 root，也會驗證惡意 archive 拒絕及舊 image rollback；只能在 disposable runner 或專用測試環境執行，禁止在正式或共享主機執行。
+自動部署流程透過 SSH stdin 傳送 artifact，只接受固定 `status` 和 `deploy <sha> <digest>` 命令；不使用 SCP/SFTP，不上傳或遠端執行 workflow 提供的 shell script。Root 短期 inbox 固定在 root 私有的 `/run/mes-deploy-inbox`，完成 checksum 後才由 runtime 移入 runtime-owned staging；gateway 不會在 runtime-owned 祖先路徑建立或清理檔案。部署器只以 loopback `/api/health` 決定是否切換 `current`，失敗時回復 MES image/config，不刪除 volume；rollback 任一步失敗會以 exit 70 明確要求人工介入。Archive 僅接受普通檔案與目錄，拒絕 symlink、hardlink、特殊項目及路徑穿越。公開 hostname/TLS/反向代理仍需另外核准與外部驗收；本範本不建立或修改公開入口。`bash infra/linux/test-mes-deployment.sh` 會清除它建立的專用測試 Compose project、測試 volume 與唯一 `/tmp` 測試 root，也會驗證惡意 archive 拒絕及舊 image rollback；只能在 disposable runner 或專用測試環境執行，禁止在正式或共享主機執行。
 
 部署 archive 不需帶入本機 `web-dist` 或 `node_modules`。MES station Dockerfile 會在 Node build stage 依 `package-lock.json` 安裝依賴、從 `web/` 建置前端，再編譯 Go 工作站；`.dockerignore` 明確排除產物與本機資料。遠端驗收會用 `git archive` 建立無 `web-dist` 的 source archive 並直接測部署建置。
 

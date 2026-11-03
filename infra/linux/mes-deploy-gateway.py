@@ -19,6 +19,9 @@ import urllib.request
 
 ROOT = Path("/srv/business-suite-mes")
 STAGING = ROOT / "staging"
+# Root's inbox is under /run: all ancestors are root-controlled, unlike
+# ROOT and its descendants, which are runtime-owned and renameable.
+INBOX = Path("/run/mes-deploy-inbox")
 MAX_ARCHIVE = 1024 * 1024 * 1024
 MAX_EXPANDED_ARCHIVE = 2 * 1024 * 1024 * 1024
 MAX_MEMBERS = 100_000
@@ -96,8 +99,25 @@ def assert_host_boundary():
     marker = ROOT / ".mes-deploy-owner"
     if marker.is_symlink() or not marker.is_file() or marker.stat().st_uid != 0 or stat.S_IMODE(marker.stat().st_mode) != 0o444 or marker.read_text(encoding="ascii").strip() != "business-suite-mes/v1":
         raise GatewayError("MES deployment owner marker is missing or invalid")
-    if STAGING.is_symlink() or not STAGING.is_dir() or STAGING.stat().st_uid != 0 or STAGING.stat().st_gid != pwd.getpwnam("mes-runtime").pw_gid or stat.S_IMODE(STAGING.stat().st_mode) != 0o750:
-        raise GatewayError("MES staging directory must be root:mes-runtime mode 0750")
+    if STAGING.is_symlink() or not STAGING.is_dir() or STAGING.stat().st_uid != runtime_account.pw_uid or STAGING.stat().st_gid != runtime_account.pw_gid:
+        raise GatewayError("MES staging directory must be owned by mes-runtime")
+    assert_root_inbox()
+
+
+def assert_root_inbox():
+    """Require a root-private inbox whose full path has no runtime-writable ancestor."""
+    inbox = Path(INBOX)
+    if not inbox.is_absolute() or inbox.name != "mes-deploy-inbox" or inbox.parent != Path("/run"):
+        raise GatewayError("MES root inbox path is not fixed")
+    current = Path("/")
+    for part in inbox.parts[1:]:
+        current = current / part
+        info = current.lstat()
+        if stat.S_ISLNK(info.st_mode) or not stat.S_ISDIR(info.st_mode) or info.st_uid != 0 or info.st_mode & 0o022:
+            raise GatewayError("MES root inbox has an unsafe or non-root-controlled ancestor")
+    info = inbox.stat()
+    if stat.S_IMODE(info.st_mode) != 0o700:
+        raise GatewayError("MES root inbox must be root-owned mode 0700")
 
 
 def check_status():
@@ -171,7 +191,7 @@ def extract_deploy_script(archive):
                 raise GatewayError("deployment helper size did not match the archive metadata")
     if contents is None:
         raise GatewayError("archive is missing deploy-mes-release.sh")
-    fd, path = tempfile.mkstemp(prefix="mes-deploy-helper-", suffix=".sh", dir="/tmp")
+    fd, path = tempfile.mkstemp(prefix="mes-deploy-helper-", suffix=".sh", dir=INBOX)
     os.fchmod(fd, 0o555)
     with os.fdopen(fd, "wb") as output:
         output.write(contents)
@@ -189,9 +209,10 @@ def deploy(sha, expected):
     except BlockingIOError as exc:
         os.close(lock_fd)
         raise GatewayError("another MES deployment request is active") from exc
-    fd, archive_name = tempfile.mkstemp(prefix=f"{sha}-", suffix=".tgz", dir=STAGING)
+    assert_root_inbox()
+    fd, archive_name = tempfile.mkstemp(prefix=f"{sha}-", suffix=".tgz", dir=INBOX)
     runtime_account = pwd.getpwnam("mes-runtime")
-    os.fchown(fd, 0, runtime_account.pw_gid)
+    os.fchown(fd, runtime_account.pw_uid, runtime_account.pw_gid)
     os.fchmod(fd, 0o640)
     digest = hashlib.sha256()
     size = 0
@@ -209,7 +230,12 @@ def deploy(sha, expected):
                 archive.write(block)
         if digest.hexdigest() != expected:
             raise GatewayError("uploaded archive digest mismatch")
-        helper = extract_deploy_script(archive_name)
+        # Transfer ownership through the runtime's own process.  The gateway
+        # never traverses or mutates runtime-owned ancestry for this handoff.
+        delivered = STAGING / f"{sha}-{expected}.tgz"
+        runtime("/usr/bin/mv", "--", archive_name, str(delivered))
+        archive_name = None
+        helper = extract_deploy_script(delivered)
         assert_rootless()
         account, env = runtime_context()
         env.update({
@@ -220,11 +246,12 @@ def deploy(sha, expected):
             "MES_REQUIRE_ROOTLESS_DOCKER": "1",
         })
         subprocess.run(
-            ["/usr/sbin/runuser", "-u", account.pw_name, "--", "/usr/bin/env", *[f"{k}={v}" for k, v in env.items()], "/bin/bash", str(helper), sha, expected, archive_name],
+            ["/usr/sbin/runuser", "-u", account.pw_name, "--", "/usr/bin/env", *[f"{k}={v}" for k, v in env.items()], "/bin/bash", str(helper), sha, expected, str(delivered)],
             check=True,
         )
     finally:
-        Path(archive_name).unlink(missing_ok=True)
+        if archive_name is not None and Path(archive_name).parent == INBOX:
+            Path(archive_name).unlink(missing_ok=True)
         if helper is not None:
             helper.unlink(missing_ok=True)
         os.close(lock_fd)
