@@ -92,7 +92,7 @@ if '"/usr/bin/docker", "info"' not in gateway or "rootless" not in gateway:
     raise SystemExit("Forced-command gateway must require the mes-runtime rootless Docker daemon")
 if '"$root" == /srv/business-suite-mes' not in script or "MES_REQUIRE_ROOTLESS_DOCKER" not in script or '"name=rootless"' not in script:
     raise SystemExit("Production deployment helper must reject rootful or non-mes-runtime Docker contexts")
-for value in ("status", "deploy", "MAX_ARCHIVE", "sha256", "runuser", "127.0.0.1:18095", "business-suite-mes/v1"):
+for value in ("status", "deploy", "MAX_ARCHIVE", "sha256", "runuser", 'PORT = "18095"', 'f"127.0.0.1:{PORT}"', "business-suite-mes/v1"):
     if value not in gateway:
         raise SystemExit(f"Forced-command gateway is missing validation: {value}")
 if "SSH_ORIGINAL_COMMAND" not in ssh_policy or "ForceCommand" not in ssh_policy or "DisableForwarding yes" not in ssh_policy or "AllowStreamLocalForwarding no" not in ssh_policy:
