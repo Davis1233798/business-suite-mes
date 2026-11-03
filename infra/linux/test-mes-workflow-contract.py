@@ -88,7 +88,7 @@ for forbidden in ("OCI_DEPLOY_KEY", "/srv/business-suite/current", "business-sui
 
 if "SSH_ORIGINAL_COMMAND" not in ssh_policy or 'pwd.getpwnam("mes-runtime")' not in gateway or "/usr/sbin/runuser" not in gateway:
     raise SystemExit("Forced-command gateway must validate SSH commands and run deployment as mes-runtime")
-if "docker info" not in gateway or "rootless" not in gateway:
+if '"/usr/bin/docker", "info"' not in gateway or "rootless" not in gateway:
     raise SystemExit("Forced-command gateway must require the mes-runtime rootless Docker daemon")
 if '"$root" == /srv/business-suite-mes' not in script or "MES_REQUIRE_ROOTLESS_DOCKER" not in script or '"name=rootless"' not in script:
     raise SystemExit("Production deployment helper must reject rootful or non-mes-runtime Docker contexts")
