@@ -204,7 +204,10 @@ MES_DEPLOY_ROOT="$deploy_root" MES_DEPLOY_PORT="$deploy_port" MES_DEPLOY_PROJECT
   bash infra/linux/deploy-mes-release.sh "$deploy_sha" "$deploy_digest" "$deploy_archive"
 current_before=$(readlink -f "$deploy_root/current")
 image_before=$(docker inspect --format '{{.Image}}' "$deploy_container")
-curl --fail --silent --show-error "http://127.0.0.1:${deploy_port}/api/health" >/dev/null
+verify_release_revision() {
+  curl --fail --silent --show-error "http://127.0.0.1:${deploy_port}/api/health" | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["data"]["revision"] == sys.argv[1], d' "$deploy_sha"
+}
+verify_release_revision
 
 # A valid archive with an always-failing Compose healthcheck forces rollback after replacement.
 mkdir -p "$deploy_root/bad-release"
@@ -218,6 +221,6 @@ if MES_DEPLOY_ROOT="$deploy_root" MES_DEPLOY_PORT="$deploy_port" MES_DEPLOY_PROJ
 fi
 [[ "$(readlink -f "$deploy_root/current")" == "$current_before" ]] || { echo 'Rollback changed current release symlink' >&2; exit 1; }
 [[ "$(docker inspect --format '{{.Image}}' "$deploy_container")" == "$image_before" ]] || { echo 'Rollback did not restore prior image' >&2; exit 1; }
-curl --fail --silent --show-error "http://127.0.0.1:${deploy_port}/api/health" >/dev/null
+verify_release_revision
 
 echo 'MES isolated Compose health, restart, and volume namespace checks passed.'
