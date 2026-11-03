@@ -4,6 +4,7 @@ from pathlib import Path
 import tarfile
 import tempfile
 import unittest
+from unittest import mock
 
 spec = importlib.util.spec_from_file_location('gateway', Path(__file__).with_name('mes-deploy-gateway.py'))
 gateway = importlib.util.module_from_spec(spec)
@@ -21,6 +22,14 @@ class GatewayArchiveTests(unittest.TestCase):
                 member.size = len(payload) if kind == tarfile.REGTYPE else 0
                 bundle.addfile(member, io.BytesIO(payload) if member.size else None)
         return archive
+
+    def test_command_parser_rejects_shell_and_path_arguments(self):
+        commands = ['deploy ../escape bad', 'status; id', 'status extra', 'deploy ' + 'a'*40 + ' ' + 'b'*64 + ' extra', 'sh -c id']
+        for command in commands:
+            with self.subTest(command=command), mock.patch.object(gateway.sys, 'argv', ['gateway', command]), mock.patch.object(gateway, 'assert_host_boundary') as boundary:
+                with self.assertRaises(gateway.GatewayError):
+                    gateway.main()
+                boundary.assert_not_called()
 
     def test_regular_helper_is_extracted_exactly(self):
         payload = b'#!/bin/bash\nexit 0\n'
