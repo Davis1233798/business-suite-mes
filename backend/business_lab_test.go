@@ -99,10 +99,37 @@ func TestBusinessLabManagerCleansDatabaseAndReleasesCapacity(t *testing.T) {
 	}
 }
 
+func TestBusinessLabCleanupNeverRemovesAnotherManagerRun(t *testing.T) {
+	root := t.TempDir()
+	firstManager := newBusinessLabManager(root, 1)
+	secondManager := newBusinessLabManager(root, 1) // models a second server process sharing the private root
+	first, err := firstManager.acquire(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	second, err := secondManager.acquire(context.Background())
+	if err != nil {
+		t.Fatal(err)
+	}
+	secondPath := second.directory
+	if err = first.close(); err != nil {
+		t.Fatal(err)
+	}
+	if _, err = os.Stat(secondPath); err != nil {
+		t.Fatalf("closing one run removed another active run: %v", err)
+	}
+	if err = second.close(); err != nil {
+		t.Fatal(err)
+	}
+}
+
 func TestBusinessLabRouteRejectsOtherStation(t *testing.T) {
 	a := appForTest(t)
 	if w := request(a, http.MethodPost, "/api/stations/erp/business-lab", map[string]any{"contenders": 8}); w.Code != http.StatusNotFound {
 		t.Fatalf("other station route: %d", w.Code)
+	}
+	if w := request(a, http.MethodPost, "/api/stations/erp/business", map[string]any{"action": "report"}); w.Code != http.StatusNotFound {
+		t.Fatalf("other station business route: %d", w.Code)
 	}
 }
 

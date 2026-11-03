@@ -62,11 +62,14 @@ func TestMESBusinessReportRaceIsAtomicAndTenantScoped(t *testing.T) {
 		t.Fatalf("success=%d conflicts=%d", wins, conflicts)
 	}
 	var state string
-	var completed, reports, audits, events int
+	var completed, reports, audits, events, reportGood, reportScrap int
 	if err := a.db.QueryRow(`SELECT status,completed_quantity FROM mes_work_orders WHERE organization_id=? AND id=?`, org, workOrder).Scan(&state, &completed); err != nil {
 		t.Fatal(err)
 	}
 	if err := a.db.QueryRow(`SELECT count(*) FROM mes_production_reports WHERE organization_id=? AND work_order_id=?`, org, workOrder).Scan(&reports); err != nil {
+		t.Fatal(err)
+	}
+	if err := a.db.QueryRow(`SELECT COALESCE(SUM(good_quantity),0),COALESCE(SUM(scrap_quantity),0) FROM mes_production_reports WHERE organization_id=? AND work_order_id=?`, org, workOrder).Scan(&reportGood, &reportScrap); err != nil {
 		t.Fatal(err)
 	}
 	if err := a.db.QueryRow(`SELECT count(*) FROM audit_events WHERE organization_id=? AND entity_id=?`, org, workOrder).Scan(&audits); err != nil {
@@ -75,8 +78,8 @@ func TestMESBusinessReportRaceIsAtomicAndTenantScoped(t *testing.T) {
 	if err := a.db.QueryRow(`SELECT count(*) FROM outbox_events WHERE organization_id=? AND event_type='mes.work-order.changed' AND json_extract(payload,'$.workOrderId')=?`, org, workOrder).Scan(&events); err != nil {
 		t.Fatal(err)
 	}
-	if state != "completed" || completed != target || reports != 1 || audits < 2 || events < 2 {
-		t.Fatalf("business state=%s completed=%d target=%d reports=%d audits=%d events=%d", state, completed, target, reports, audits, events)
+	if state != "completed" || completed != target || reports != 1 || reportGood != completed || reportScrap != 0 || audits < 2 || events < 2 {
+		t.Fatalf("business state=%s completed=%d target=%d reports=%d reportGood=%d reportScrap=%d audits=%d events=%d", state, completed, target, reports, reportGood, reportScrap, audits, events)
 	}
 	var key string
 	if err := a.db.QueryRow(`SELECT idempotency_key FROM mes_production_reports WHERE organization_id=? AND work_order_id=?`, org, workOrder).Scan(&key); err != nil {
@@ -96,6 +99,9 @@ func TestMESBusinessReportRaceIsAtomicAndTenantScoped(t *testing.T) {
 	replayBody["goodQuantity"] = 1
 	if w = request(a, http.MethodPost, path, replayBody, front...); w.Code != http.StatusConflict {
 		t.Fatalf("changed retry payload: %d", w.Code)
+	}
+	if err := a.db.QueryRow(`SELECT count(*) FROM mes_production_reports WHERE organization_id=? AND work_order_id=?`, org, workOrder).Scan(&reports); err != nil || reports != 1 {
+		t.Fatalf("changed retry payload mutated report rows: reports=%d err=%v", reports, err)
 	}
 	if w = request(a, http.MethodPost, path, map[string]any{"action": "report", "workOrderId": workOrder, "operationId": operation, "goodQuantity": 1, "idempotencyKey": "readonly-report-0001"}, readonly...); w.Code != http.StatusForbidden {
 		t.Fatalf("readonly report: %d", w.Code)
