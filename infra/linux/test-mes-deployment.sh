@@ -65,6 +65,7 @@ command -v git >/dev/null || { echo 'git is required' >&2; exit 2; }
 [[ -z "$(docker ps -aq --filter "label=com.docker.compose.project=${project}")" ]] || { echo "Test project already exists: $project" >&2; exit 2; }
 [[ -z "$(docker ps -aq --filter "label=com.docker.compose.project=${probe_project}")" ]] || { echo "Probe project already exists: $probe_project" >&2; exit 2; }
 [[ -z "$(docker ps -aq --filter "label=com.docker.compose.project=${deploy_project}")" ]] || { echo "Deploy project already exists: $deploy_project" >&2; exit 2; }
+[[ "$deploy_project" =~ ^mes-deploy-acceptance-[0-9]+-[0-9]+$ ]] || { echo 'Test deploy project must be uniquely namespaced' >&2; exit 2; }
 ! docker volume inspect "$test_volume" >/dev/null 2>&1 || { echo "Test volume already exists: $test_volume" >&2; exit 2; }
 ! docker volume inspect "$probe_volume" >/dev/null 2>&1 || { echo "Probe volume already exists: $probe_volume" >&2; exit 2; }
 ! docker volume inspect "$deploy_volume" >/dev/null 2>&1 || { echo "Deploy volume already exists: $deploy_volume" >&2; exit 2; }
@@ -130,6 +131,21 @@ fi
 deploy_sha=$(printf '%s' "$sha" | sha256sum | cut -c1-40)
 deploy_digest=$(sha256sum "$deploy_archive" | cut -d' ' -f1)
 if [[ -e "$deploy_root/current" || -e "$deploy_root/releases/$deploy_sha" ]]; then echo 'Unexpected test deploy state' >&2; exit 1; fi
+
+# A test root cannot select a production/shared project or volume name.
+if MES_DEPLOY_ROOT="$deploy_root" MES_DEPLOY_PORT="$deploy_port" MES_DEPLOY_PROJECT=business-suite MES_DEPLOY_DATA_VOLUME=business-suite-station-data \
+    bash infra/linux/deploy-mes-release.sh "$deploy_sha" "$deploy_digest" "$deploy_archive"; then
+  echo 'Deployment accepted a shared production project/volume from a test root' >&2; exit 1
+fi
+
+# An unfamiliar Compose service under the selected project must block deploy before build/up/down.
+docker run --detach --label "com.docker.compose.project=${deploy_project}" --label com.docker.compose.service=foreign-service alpine:3.21 sleep 300 >/dev/null
+if MES_DEPLOY_ROOT="$deploy_root" MES_DEPLOY_PORT="$deploy_port" MES_DEPLOY_PROJECT="$deploy_project" MES_DEPLOY_DATA_VOLUME="$deploy_volume" \
+    bash infra/linux/deploy-mes-release.sh "$deploy_sha" "$deploy_digest" "$deploy_archive"; then
+  docker rm -f "$(docker ps -aq --filter "label=com.docker.compose.project=${deploy_project}" --filter "label=com.docker.compose.service=foreign-service")" >/dev/null || true
+  echo 'Deployment accepted a foreign service in the MES Compose project' >&2; exit 1
+fi
+docker rm -f "$(docker ps -aq --filter "label=com.docker.compose.project=${deploy_project}" --filter "label=com.docker.compose.service=foreign-service")" >/dev/null
 
 for kind in symlink hardlink fifo traversal absolute; do
   case "$kind" in
