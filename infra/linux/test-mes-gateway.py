@@ -100,5 +100,12 @@ class GatewayArchiveTests(unittest.TestCase):
             self.assertFalse(root_archive.exists())
             self.assertEqual(archive.read_bytes(), b'keep')
 
+    def test_archive_validation_precedes_runtime_staging_handoff(self):
+        source = Path(__file__).with_name('mes-deploy-gateway.py').read_text()
+        extraction = source.index('helper = extract_deploy_script(archive_name)')
+        delivery = source.index('runtime("/usr/bin/install", "-m", "0600", "--", archive_name, str(delivered))')
+        self.assertLess(extraction, delivery)
+        self.assertNotIn('extract_deploy_script(delivered)', source)
+
 if __name__ == '__main__':
     unittest.main()
