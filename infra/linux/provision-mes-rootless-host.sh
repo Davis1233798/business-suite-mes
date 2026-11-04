@@ -202,7 +202,7 @@ if (( managed_state )); then
   aa-status | grep -Fq rootlesskit || fail 'Ubuntu rootlesskit AppArmor profile is not loaded'
   runtime_uid=$(id -u "$RUNTIME")
   [[ -S "/run/user/$runtime_uid/docker.sock" && $(stat -c '%U:%a' "/run/user/$runtime_uid/docker.sock") == "$RUNTIME:600" ]] || fail 'managed rootless Docker socket is unavailable or unsafe'
-  rootless_security=$(runuser -u "$RUNTIME" -- env HOME=/var/lib/mes-runtime XDG_RUNTIME_DIR="/run/user/$runtime_uid" DOCKER_HOST="unix:///run/user/$runtime_uid/docker.sock" docker info --format '{{json .SecurityOptions}}' 2>/dev/null) || fail 'managed rootless Docker daemon is unavailable'
+  rootless_security=$(runuser -u "$RUNTIME" -- env -i HOME=/var/lib/mes-runtime XDG_RUNTIME_DIR="/run/user/$runtime_uid" DOCKER_HOST="unix:///run/user/$runtime_uid/docker.sock" docker info --format '{{json .SecurityOptions}}' 2>/dev/null) || fail 'managed rootless Docker daemon is unavailable'
   [[ $rootless_security == *'"name=rootless"'* ]] || fail 'MES Docker daemon is not rootless'
   [[ $(systemctl is-active docker.service) == active && $(docker info --format '{{.ServerVersion}}') == "$server_version" ]] || fail 'rootful Docker service/version changed'
   note 'Managed host marker found; auditing the existing installation.'
@@ -211,7 +211,7 @@ if ss -H -ltn 'sport = :18095' | grep -q .; then
   (( managed_state )) || fail 'TCP port 18095 is already in use on an unmanaged host'
   runtime_uid=$(id -u "$RUNTIME")
   runtime_socket="unix:///run/user/$runtime_uid/docker.sock"
-  managed_ids=$(runuser -u "$RUNTIME" -- env HOME=/var/lib/mes-runtime XDG_RUNTIME_DIR="/run/user/$runtime_uid" DOCKER_HOST="$runtime_socket" /usr/bin/docker ps -q --filter 'label=com.docker.compose.project=business-suite-mes' --filter status=running) || fail 'cannot verify the managed MES container owning TCP port 18095'
+  managed_ids=$(runuser -u "$RUNTIME" -- env -i HOME=/var/lib/mes-runtime XDG_RUNTIME_DIR="/run/user/$runtime_uid" DOCKER_HOST="$runtime_socket" /usr/bin/docker ps -q --filter 'label=com.docker.compose.project=business-suite-mes' --filter status=running) || fail 'cannot verify the managed MES container owning TCP port 18095'
   [[ $(wc -w <<<"$managed_ids" | tr -d ' ') == 1 ]] || fail 'TCP port 18095 is occupied without exactly one managed MES container'
   "$GATEWAY" status >/dev/null || fail 'TCP port 18095 is not owned by a healthy, gateway-verified MES service'
 fi
@@ -309,7 +309,7 @@ aa-status | grep -Fq rootlesskit || fail 'Ubuntu rootlesskit AppArmor profile is
 loginctl enable-linger "$RUNTIME"
 for attempt in $(seq 1 20); do [[ -S "/run/user/$runtime_uid/bus" ]] && break; sleep 1; done
 [[ -S "/run/user/$runtime_uid/bus" ]] || fail 'runtime user systemd bus did not appear after enabling linger'
-runuser -u "$RUNTIME" -- env \
+runuser -u "$RUNTIME" -- env -i \
   HOME=/var/lib/mes-runtime USER="$RUNTIME" LOGNAME="$RUNTIME" \
   XDG_RUNTIME_DIR="/run/user/$runtime_uid" \
   DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$runtime_uid/bus" \
@@ -317,10 +317,10 @@ runuser -u "$RUNTIME" -- env \
   "$ROOTLESS_BIN/dockerd-rootless-setuptool.sh" install --force
 
 for attempt in $(seq 1 30); do
-  if runuser -u "$RUNTIME" -- env HOME=/var/lib/mes-runtime XDG_RUNTIME_DIR="/run/user/$runtime_uid" DOCKER_HOST="unix:///run/user/$runtime_uid/docker.sock" docker info --format '{{json .SecurityOptions}}' 2>/dev/null | grep -q '"name=rootless"'; then break; fi
+  if runuser -u "$RUNTIME" -- env -i HOME=/var/lib/mes-runtime XDG_RUNTIME_DIR="/run/user/$runtime_uid" DOCKER_HOST="unix:///run/user/$runtime_uid/docker.sock" docker info --format '{{json .SecurityOptions}}' 2>/dev/null | grep -q '"name=rootless"'; then break; fi
   sleep 2
 done
-runuser -u "$RUNTIME" -- env HOME=/var/lib/mes-runtime XDG_RUNTIME_DIR="/run/user/$runtime_uid" DOCKER_HOST="unix:///run/user/$runtime_uid/docker.sock" docker info --format '{{json .SecurityOptions}}' | grep -q '"name=rootless"' || fail 'rootless Docker daemon did not become ready'
+runuser -u "$RUNTIME" -- env -i HOME=/var/lib/mes-runtime XDG_RUNTIME_DIR="/run/user/$runtime_uid" DOCKER_HOST="unix:///run/user/$runtime_uid/docker.sock" docker info --format '{{json .SecurityOptions}}' | grep -q '"name=rootless"' || fail 'rootless Docker daemon did not become ready'
 [[ $(stat -c '%U:%a' "/run/user/$runtime_uid/docker.sock") == "$RUNTIME:600" ]] || fail 'rootless Docker socket owner/mode is unsafe'
 [[ $(systemctl is-active docker.service) == active ]] || fail 'rootful Docker service was disrupted'
 [[ $(docker info --format '{{.ServerVersion}}') == "$server_version" ]] || fail 'rootful Docker version changed during provisioning'

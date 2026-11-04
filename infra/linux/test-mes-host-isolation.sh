@@ -58,7 +58,7 @@ aa-status | grep -Fq rootlesskit || fail 'rootlesskit AppArmor profile is not lo
 runtime_uid=$(id -u mes-runtime)
 runtime_dir="/run/user/$runtime_uid"
 [[ -d "$runtime_dir" && -S "$runtime_dir/docker.sock" && ! -L "$runtime_dir/docker.sock" && $(stat -c '%U' "$runtime_dir/docker.sock") == mes-runtime ]] || fail 'mes-runtime rootless daemon socket is unavailable or owned by another account'
-security=$(runuser -u mes-runtime -- env HOME="$(getent passwd mes-runtime | cut -d: -f6)" XDG_RUNTIME_DIR="$runtime_dir" DOCKER_HOST="unix://$runtime_dir/docker.sock" docker info --format '{{json .SecurityOptions}}')
+security=$(runuser -u mes-runtime -- env -i PATH=/usr/bin:/bin HOME="$(getent passwd mes-runtime | cut -d: -f6)" XDG_RUNTIME_DIR="$runtime_dir" DOCKER_HOST="unix://$runtime_dir/docker.sock" docker info --format '{{json .SecurityOptions}}')
 [[ "$security" == *'"name=rootless"'* ]] || fail 'mes-runtime is connected to a rootful Docker daemon'
 
 effective=$(sshd -T -C "user=mes-deploy,host=$(hostname -f),addr=127.0.0.1")

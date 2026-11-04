@@ -61,7 +61,7 @@ def runtime(*args, **kwargs):
     account, env = runtime_context()
     check = kwargs.pop("check", True)
     return subprocess.run(
-        ["/usr/sbin/runuser", "-u", account.pw_name, "--", "/usr/bin/env", *[f"{k}={v}" for k, v in env.items()], *args],
+        ["/usr/sbin/runuser", "-u", account.pw_name, "--", "/usr/bin/env", "-i", *[f"{k}={v}" for k, v in env.items()], *args],
         check=check,
         **kwargs,
     )
@@ -273,7 +273,7 @@ def deploy(sha, expected):
             "MES_REQUIRE_ROOTLESS_DOCKER": "1",
         })
         subprocess.run(
-            ["/usr/sbin/runuser", "-u", account.pw_name, "--", "/usr/bin/env", *[f"{k}={v}" for k, v in env.items()], "/bin/bash", str(helper), sha, expected, str(delivered)],
+            ["/usr/sbin/runuser", "-u", account.pw_name, "--", "/usr/bin/env", "-i", *[f"{k}={v}" for k, v in env.items()], "/bin/bash", str(helper), sha, expected, str(delivered)],
             check=True,
         )
     finally:
