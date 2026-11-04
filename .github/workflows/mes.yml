@@ -144,7 +144,7 @@ jobs:
             docker volume rm "$volume" >/dev/null 2>&1 || true
             rm -f -- "$port_probe_log" "$port_check_log"
             if [[ -d "$source_dir" && ! -L "$source_dir" && "$(realpath -e -- "$source_dir")" == "$source_dir" ]]; then
-              rm -rf -- "$source_dir"
+              sudo -u mes-runtime -- /usr/bin/rm -rf -- "$source_dir"
             fi
           }
           trap cleanup EXIT
@@ -196,8 +196,9 @@ jobs:
             bash -c 'cd "$1" && exec bash infra/linux/test-mes-deployment.sh' _ "$source_dir"
           echo 'Deploy MES on its owned production port, then audit it'
           release_archive="/srv/business-suite-mes/staging/$GITHUB_SHA.tgz"
-          sudo -u mes-runtime -- bash -c 'set -Eeuo pipefail; cd "$1"; git archive --format=tar "$2" | gzip -n > "$3"' _ "$source_dir" "$GITHUB_SHA" "$release_archive"
-          release_digest="$(sha256sum "$release_archive" | cut -d' ' -f1)"
+          sudo -u mes-runtime -- env -i HOME=/var/lib/mes-runtime PATH=/usr/bin:/bin /bin/bash -c 'set -Eeuo pipefail; cd "$1"; git archive --format=tar "$2" | gzip -n > "$3"' _ "$source_dir" "$GITHUB_SHA" "$release_archive"
+          test ! -r "$release_archive"
+          release_digest="$(sudo -u mes-runtime -- /usr/bin/sha256sum "$release_archive" | cut -d' ' -f1)"
           sudo -u mes-runtime -- env -i \
             HOME=/var/lib/mes-runtime PATH=/usr/bin:/bin \
             XDG_RUNTIME_DIR="/run/user/$runtime_uid" \
