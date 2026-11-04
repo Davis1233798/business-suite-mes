@@ -169,9 +169,11 @@ jobs:
           sudo install -d -m 0755 -o "$(id -un)" -g "$(id -gn)" /srv/business-suite
           printf 'portfolio sentinel\n' | sudo tee /srv/business-suite/provisioner-ci-sentinel >/dev/null
           sudo bash infra/linux/provision-mes-rootless-host.sh --check
-          sudo bash infra/linux/provision-mes-rootless-host.sh --apply
+          sudo env XDG_CONFIG_HOME=/root/mes-ci-inherited-config DOCKER_CONFIG=/root/mes-ci-inherited-docker bash infra/linux/provision-mes-rootless-host.sh --apply
+          sudo test ! -e /root/mes-ci-inherited-config
+          sudo test ! -e /root/mes-ci-inherited-docker
           # A second apply must audit and return without disrupting either daemon.
-          sudo bash infra/linux/provision-mes-rootless-host.sh --apply
+          sudo env XDG_CONFIG_HOME=/root/mes-ci-inherited-config DOCKER_CONFIG=/root/mes-ci-inherited-docker bash infra/linux/provision-mes-rootless-host.sh --apply
           sudo bash infra/linux/provision-mes-rootless-host.sh --check
           sudo bash infra/linux/test-mes-host-isolation.sh
           sudo -u mes-runtime -- git clone --no-hardlinks "$GITHUB_WORKSPACE" "$source_dir"
@@ -215,7 +217,7 @@ jobs:
           sudo -u mes-runtime -- env HOME=/var/lib/mes-runtime XDG_RUNTIME_DIR="/run/user/$runtime_uid" DOCKER_HOST="unix:///run/user/$runtime_uid/docker.sock" /usr/bin/docker start "$managed_container" >/dev/null
           curl --fail --silent --show-error --retry 15 --retry-connrefused --retry-delay 2 http://127.0.0.1:18095/api/health | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["success"] is True and d["data"]["status"] == "ready", d'
           sudo bash infra/linux/provision-mes-rootless-host.sh --check
-          sudo bash infra/linux/provision-mes-rootless-host.sh --apply
+          sudo env XDG_CONFIG_HOME=/root/mes-ci-inherited-config DOCKER_CONFIG=/root/mes-ci-inherited-docker bash infra/linux/provision-mes-rootless-host.sh --apply
           [[ "$(docker info --format '{{.ServerVersion}}')" == "$engine_version" ]]
           [[ "$(docker ps --filter "name=^/${sentinel}$" --format '{{.ID}}')" == "${sentinel_id:0:12}" ]]
           docker exec "$sentinel" test "$(docker exec "$sentinel" cat /data/sentinel)" = preserved

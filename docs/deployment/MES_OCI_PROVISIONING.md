@@ -47,3 +47,5 @@ GitHub Actions 的 disposable `ubuntu-24.04-arm` job 在 runner VM 上先移除�
 - Docker 的 [rootless troubleshooting](https://docs.docker.com/engine/security/rootless/troubleshoot/) 說明 Ubuntu 24.04 預設限制 unprivileged user namespaces，並要求以 AppArmor profile 授權；不要求停用整體保護。
 - Ubuntu Noble 的 [apparmor package file list](https://packages.ubuntu.com/noble/all/apparmor/filelist) 包含 `/etc/apparmor.d/rootlesskit`。
 - Rootless setup scripts 與授權文字固定於 Moby [`docker-v29.1.3`](https://github.com/moby/moby/tree/docker-v29.1.3/contrib) tag；來源 revision 與 SHA-256 列於 `infra/linux/rootless-vendor/SOURCE.md`。
+
+Runtime commands use a clean environment with explicit private HOME, PATH and rootless socket/runtime paths. Caller XDG and Docker configuration must not redirect mes-runtime into the operator or CI home. ARM64 acceptance supplies inaccessible caller config paths and verifies they are never created.
