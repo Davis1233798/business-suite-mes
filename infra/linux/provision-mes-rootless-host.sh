@@ -95,7 +95,6 @@ for target_fs in /var/lib /srv; do
 done
 docker_compose=$(docker compose version --short 2>/dev/null || true)
 [[ -n $docker_compose ]] || fail 'rootful Docker Compose v2 plugin is required'
-if ss -H -ltn 'sport = :18095' | grep -q .; then fail 'TCP port 18095 is already in use'; fi
 
 if [[ -r /proc/sys/kernel/apparmor_restrict_unprivileged_userns ]] && [[ $(cat /proc/sys/kernel/apparmor_restrict_unprivileged_userns) != 1 ]]; then
   fail 'Ubuntu user-namespace AppArmor restriction is not enabled'
@@ -205,9 +204,17 @@ if (( managed_state )); then
   rootless_security=$(runuser -u "$RUNTIME" -- env HOME=/var/lib/mes-runtime XDG_RUNTIME_DIR="/run/user/$runtime_uid" DOCKER_HOST="unix:///run/user/$runtime_uid/docker.sock" docker info --format '{{json .SecurityOptions}}' 2>/dev/null) || fail 'managed rootless Docker daemon is unavailable'
   [[ $rootless_security == *'"name=rootless"'* ]] || fail 'MES Docker daemon is not rootless'
   [[ $(systemctl is-active docker.service) == active && $(docker info --format '{{.ServerVersion}}') == "$server_version" ]] || fail 'rootful Docker service/version changed'
-  bash "$REPO_ROOT/infra/linux/test-mes-host-isolation.sh"
   note 'Managed host marker found; auditing the existing installation.'
 fi
+if ss -H -ltn 'sport = :18095' | grep -q .; then
+  (( managed_state )) || fail 'TCP port 18095 is already in use on an unmanaged host'
+  runtime_uid=$(id -u "$RUNTIME")
+  runtime_socket="unix:///run/user/$runtime_uid/docker.sock"
+  managed_ids=$(runuser -u "$RUNTIME" -- env HOME=/var/lib/mes-runtime XDG_RUNTIME_DIR="/run/user/$runtime_uid" DOCKER_HOST="$runtime_socket" /usr/bin/docker ps -q --filter 'label=com.docker.compose.project=business-suite-mes' --filter status=running) || fail 'cannot verify the managed MES container owning TCP port 18095'
+  [[ $(wc -w <<<"$managed_ids" | tr -d ' ') == 1 ]] || fail 'TCP port 18095 is occupied without exactly one managed MES container'
+  "$GATEWAY" status >/dev/null || fail 'TCP port 18095 is not owned by a healthy, gateway-verified MES service'
+fi
+if (( managed_state )); then bash "$REPO_ROOT/infra/linux/test-mes-host-isolation.sh"; fi
 note "Preflight passed: Ubuntu 24.04 ARM64, rootful Docker $server_version and Compose $docker_compose remain active; mode=$MODE."
 if [[ $MODE == check ]]; then exit 0; fi
 if (( managed_state )); then

@@ -17,7 +17,7 @@ Provisioner 只透過 Ubuntu 套件安裝 `acl`, `apparmor`, `dbus-user-session`
 
 ## 操作順序
 
-先在維護時段確認實際主機、rootful Docker 29.x、Compose v2、磁碟容量、既有 `/srv/business-suite` ACL 與 18095 loopback port；不要把此腳本指向其他主機。完整主機已管理時，重跑 `--apply` 會先執行稽核後直接返回，不會重啟 daemon。先預覽檢查：
+先在維護時段確認實際主機、rootful Docker 29.x、Compose v2、磁碟容量與既有 `/srv/business-suite` ACL；不要把此腳本指向其他主機。初次安裝時，18095 loopback port 必須空閒。已管理主機若該 port 被占用，只在固定 root gateway 驗證恰好一個預期 rootless MES container、固定 `127.0.0.1:18095` mapping 及健康回應後才允許檢查；任意 process 的 listener 仍會被拒絕。完整主機重跑 `--apply` 會先執行稽核後直接返回，不會重啟 daemon。先預覽檢查：
 
 ```bash
 sudo bash infra/linux/provision-mes-rootless-host.sh --check
@@ -40,7 +40,7 @@ Provisioner 不會建立部署 SSH key，也不會開啟 `MES_DEPLOY_ENABLED`、
 
 ## 驗收
 
-GitHub Actions 的 disposable `ubuntu-24.04-arm` job 在隔離 VM 上執行 `--check` 和連續兩次 `--apply`，同時保留 rootful Docker sentinel 容器與 volume；第二次套用必須只稽核並返回，不重啟或替換服務。接著驗證 rootless service、AppArmor、UID/GID mapping、帳號隔離、共享樹 ACL 拒絕，以及 MES test-only Compose project 的建置、health、資料持久與 rollback。該 job 不使用 OCI secrets，不在 production OCI 執行清理型測試，也不註冊為 self-hosted runner。Production 是否部署仍由既有 `mes-production` GitHub Environment gated workflow 控制。
+GitHub Actions 的 disposable `ubuntu-24.04-arm` job 在 runner VM 上先移除預裝的 Docker 28 packages，並由 Ubuntu Noble archive 安裝 `docker.io=29.1.3-0ubuntu3~24.04.2` 與 Ubuntu `docker-compose-v2`。這個替換只發生在 disposable CI VM，讓驗收符合 OCI 的 Ubuntu `docker.io` 29.x 前置條件；production provisioner 仍拒絕升級、替換或重啟既有 rootful Docker。CI 先以臨時非 MES listener 驗證未管理主機會拒絕被占用的 18095 port，再於 rootless runtime 部署一個有效 MES release，證明已管理主機接受 gateway 驗證通過的預期服務 listener，並拒絕 MES container 停止時由臨時非 MES listener 占用的同一 port。CI 另在空 port 情況執行 `--check` 與連續兩次 `--apply`，同時保留 rootful Docker sentinel 容器與 volume；第二次套用必須只稽核並返回，不重啟或替換服務。接著驗證 rootless service、AppArmor、UID/GID mapping、帳號隔離、共享樹 ACL 拒絕，以及 MES test-only Compose project 的建置、health、資料持久與 rollback。該 job 不使用 OCI secrets，不在 production OCI 執行清理型測試，也不註冊為 self-hosted runner。Production 是否部署仍由既有 `mes-production` GitHub Environment gated workflow 控制。
 
 ## 上游依據
 

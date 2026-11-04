@@ -39,6 +39,16 @@ if not job_match:
     raise SystemExit("Workflow must contain a rootless-host-provisioning job")
 job = job_match.group(1)
 for value in (
+    "DISPOSABLE ARM64 runner only", "docker.io=29.1.3-0ubuntu3~24.04.2",
+    "docker-compose-v2", "apt-get remove", "docker info --format '{{.ServerVersion}}'",
+    "Prove unmanaged port conflicts are rejected", "python3 -m http.server 18095",
+    "Deploy MES on its owned production port, then audit it", "deploy-mes-release.sh",
+    "http://127.0.0.1:18095/api/health", "Prove managed port conflicts are rejected",
+    "docker stop", "docker start",
+):
+    if value not in job:
+        raise SystemExit(f"ARM64 runner must establish the pinned Ubuntu Docker baseline: {value}")
+for value in (
     "runs-on: ubuntu-24.04-arm", "provision-mes-rootless-host.sh --check",
     "provision-mes-rootless-host.sh --apply", "test-mes-host-isolation.sh",
     "test-mes-deployment.sh", "mes-provisioner-rootful-sentinel",
@@ -47,11 +57,13 @@ for value in (
         raise SystemExit(f"Disposable ARM64 acceptance job is missing {value}")
 if job.count("provision-mes-rootless-host.sh --apply") < 2:
     raise SystemExit("Disposable ARM64 acceptance must prove a repeated --apply is idempotent")
+if job.count("provision-mes-rootless-host.sh --check") < 3:
+    raise SystemExit("Disposable ARM64 acceptance must check initial, managed and deployed-host states")
 for value in ("needs: [mes, windows-desktop, rootless-host-provisioning]",):
     if value not in workflow:
         raise SystemExit(f"Release gates do not include rootless acceptance: {value}")
 
-for value in ("--check", "--apply", "rootful", "AppArmor", "ubuntu-24.04-arm", "不會建立部署 SSH key", "/var/lib", "/srv", "重跑 `--apply`"):
+for value in ("--check", "--apply", "rootful", "AppArmor", "ubuntu-24.04-arm", "不會建立部署 SSH key", "/var/lib", "/srv", "重跑 `--apply`", "disposable `ubuntu-24.04-arm` job", "只發生在 disposable CI VM"):
     if value not in docs:
         raise SystemExit(f"Provisioning documentation is missing {value}")
 
