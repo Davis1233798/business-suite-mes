@@ -81,6 +81,8 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
+      - name: Validate provisioning shell syntax before host setup
+        run: bash -n infra/linux/provision-mes-rootless-host.sh
       - name: Replace Docker only inside disposable ARM64 runner
         shell: bash
         run: |
