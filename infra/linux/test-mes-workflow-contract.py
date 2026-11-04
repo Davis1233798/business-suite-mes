@@ -13,6 +13,7 @@ gateway = Path("infra/linux/mes-deploy-gateway.py").read_text()
 docs = Path("docs/deployment/ISOLATED_DEPLOYMENT.md").read_text()
 acceptance = Path("infra/linux/test-mes-deployment.sh").read_text()
 host_audit = Path("infra/linux/test-mes-host-isolation.sh").read_text()
+gateway_tests = Path("infra/linux/test-mes-gateway.py").read_text()
 ssh_policy = Path("infra/linux/sshd-mes-deploy.conf").read_text()
 sudo_policy = Path("infra/linux/mes-deploy.sudoers").read_text()
 compose = Path("infra/linux/compose.mes-isolated.yaml").read_text()
@@ -113,7 +114,7 @@ for value in ("/var/run/docker.sock", "privileged: true", "network_mode: host"):
     if value in compose:
         raise SystemExit(f"MES Compose contract contains a forbidden host escape: {value}")
 
-for value in ("business-suite-mes/v1", "business-suite-mes-station-data", "MES_DEPLOY_ENABLED=true", "mes-production", "rootless", "ForceCommand", "business-suite-mes_default", "跨主機", "mTLS", "不完成公開 hostname cutover", "/run/mes-deploy-inbox"):
+for value in ("business-suite-mes/v1", "business-suite-mes-station-data", "MES_DEPLOY_ENABLED=true", "mes-production", "rootless", "ForceCommand", "business-suite-mes_default", "跨 daemon", "Unix socket upstream", "不完成公開 hostname cutover", "/run/mes-deploy-inbox", "既有 OCI", "/srv/business-suite", "拒絕存取"):
     if value not in docs:
         raise SystemExit(f"Deployment boundary documentation is missing: {value}")
 
@@ -128,6 +129,10 @@ for value in ("compose_volume_matches", "A missed volume substitution passed the
 for value in ("mes-deploy", "mes-runtime", "rootless", "/var/run/docker.sock", "ForceCommand", "business-suite"):
     if value not in host_audit:
         raise SystemExit(f"Remote host isolation audit is missing: {value}")
+
+for value in ("test_shared_oci_tree_requires_denied_runtime_access", "returncode=2", "test_shared_oci_tree_may_be_absent"):
+    if value not in gateway_tests:
+        raise SystemExit(f"Gateway tests are missing shared-host access-denial coverage: {value}")
 
 
 print("MES deployment workflow and isolation contract passed.")

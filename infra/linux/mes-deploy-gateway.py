@@ -18,6 +18,7 @@ import stat
 import urllib.request
 
 ROOT = Path("/srv/business-suite-mes")
+SHARED_ROOT = Path("/srv/business-suite")
 STAGING = ROOT / "staging"
 # Root's inbox is under /run: all ancestors are root-controlled, unlike
 # ROOT and its descendants, which are runtime-owned and renameable.
@@ -72,15 +73,24 @@ def assert_rootless():
         raise GatewayError("mes-runtime Docker daemon is not rootless")
 
 
+def assert_shared_tree_inaccessible(accounts):
+    if not SHARED_ROOT.exists():
+        return
+    for account in accounts:
+        for permission in ('-r', '-x'):
+            result = subprocess.run(['/usr/sbin/runuser', '-u', account.pw_name, '--', '/usr/bin/test', permission, str(SHARED_ROOT)])
+            if result.returncode != 1:
+                raise GatewayError('MES account can access shared portfolio data or its isolation probe failed')
+
+
 def assert_host_boundary():
     if os.geteuid() != 0:
         raise GatewayError("gateway must be installed and run as root")
-    if Path("/srv/business-suite").exists():
-        raise GatewayError("refusing deployment host containing the shared portfolio release tree")
     deploy_account = pwd.getpwnam("mes-deploy")
     runtime_account = pwd.getpwnam("mes-runtime")
     if deploy_account.pw_uid in (0, runtime_account.pw_uid) or runtime_account.pw_uid == 0:
         raise GatewayError("mes-deploy and mes-runtime must be distinct non-root accounts")
+    assert_shared_tree_inaccessible((deploy_account, runtime_account))
     for account in (deploy_account, runtime_account):
         group_names = {grp.getgrgid(gid).gr_name for gid in os.getgrouplist(account.pw_name, account.pw_gid)}
         if "docker" in group_names:
