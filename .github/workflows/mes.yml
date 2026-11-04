@@ -174,6 +174,9 @@ jobs:
           sudo env XDG_CONFIG_HOME=/root/mes-ci-inherited-config DOCKER_CONFIG=/root/mes-ci-inherited-docker bash infra/linux/provision-mes-rootless-host.sh --apply
           sudo test ! -e /root/mes-ci-inherited-config
           sudo test ! -e /root/mes-ci-inherited-docker
+          runtime_uid=$(id -u mes-runtime)
+          sudo -u mes-runtime -- env -i HOME=/var/lib/mes-runtime PATH=/usr/bin:/bin XDG_RUNTIME_DIR="/run/user/$runtime_uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$runtime_uid/bus" /usr/bin/systemctl --user restart docker.service
+          test "$(sudo stat -c '%U:%a' "/run/user/$runtime_uid/docker.sock")" = mes-runtime:600
           # A second apply must audit and return without disrupting either daemon.
           sudo env XDG_CONFIG_HOME=/root/mes-ci-inherited-config DOCKER_CONFIG=/root/mes-ci-inherited-docker bash infra/linux/provision-mes-rootless-host.sh --apply
           sudo bash infra/linux/provision-mes-rootless-host.sh --check
