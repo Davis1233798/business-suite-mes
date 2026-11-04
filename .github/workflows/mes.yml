@@ -72,8 +72,62 @@ jobs:
       - name: Verify deployment workflow boundary contract
         run: python3 infra/linux/test-mes-workflow-contract.py
 
+  rootless-host-provisioning:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Provision rootless MES beside an unchanged rootful Docker sentinel
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          engine_version="$(docker info --format '{{.ServerVersion}}')"
+          [[ "$engine_version" == 29.* ]] || { echo "Expected existing rootful Docker 29.x, got $engine_version" >&2; exit 1; }
+          rootful_ids="$(docker ps -aq)"
+          sentinel="mes-provisioner-rootful-sentinel-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          volume="mes-provisioner-rootful-volume-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          source_dir="/tmp/mes-provisioning-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          [[ "$sentinel" =~ ^mes-provisioner-rootful-sentinel-[0-9]+-[0-9]+$ ]]
+          [[ "$volume" =~ ^mes-provisioner-rootful-volume-[0-9]+-[0-9]+$ ]]
+          [[ "$source_dir" =~ ^/tmp/mes-provisioning-[0-9]+-[0-9]+$ ]]
+          ! docker inspect "$sentinel" >/dev/null 2>&1
+          ! docker volume inspect "$volume" >/dev/null 2>&1
+          [[ ! -e /srv/business-suite && ! -L /srv/business-suite ]]
+          cleanup() {
+            docker rm -f "$sentinel" >/dev/null 2>&1 || true
+            docker volume rm "$volume" >/dev/null 2>&1 || true
+            if [[ -d "$source_dir" && ! -L "$source_dir" && "$(realpath -e -- "$source_dir")" == "$source_dir" ]]; then
+              rm -rf -- "$source_dir"
+            fi
+          }
+          trap cleanup EXIT
+          docker volume create "$volume" >/dev/null
+          docker run --detach --name "$sentinel" --volume "$volume:/data" alpine:3.21 sh -c 'printf preserved >/data/sentinel; exec sleep 3600' >/dev/null
+          sentinel_id="$(docker inspect --format '{{.Id}}' "$sentinel")"
+          sudo install -d -m 0755 -o "$(id -un)" -g "$(id -gn)" /srv/business-suite
+          printf 'portfolio sentinel\n' | sudo tee /srv/business-suite/provisioner-ci-sentinel >/dev/null
+          sudo bash infra/linux/provision-mes-rootless-host.sh --check
+          sudo bash infra/linux/provision-mes-rootless-host.sh --apply
+          sudo bash infra/linux/provision-mes-rootless-host.sh --check
+          sudo bash infra/linux/test-mes-host-isolation.sh
+          sudo install -d -m 0700 -o mes-runtime -g mes-runtime "$source_dir"
+          git archive --format=tar "$GITHUB_SHA" | sudo -u mes-runtime -- tar -xf - -C "$source_dir"
+          runtime_uid="$(id -u mes-runtime)"
+          sudo -u mes-runtime env \
+            HOME="$(getent passwd mes-runtime | cut -d: -f6)" \
+            XDG_RUNTIME_DIR="/run/user/$runtime_uid" \
+            DOCKER_HOST="unix:///run/user/$runtime_uid/docker.sock" \
+            bash "$source_dir/infra/linux/test-mes-deployment.sh"
+          [[ "$(docker info --format '{{.ServerVersion}}')" == "$engine_version" ]]
+          [[ "$(docker ps --filter "name=^/${sentinel}$" --format '{{.ID}}')" == "${sentinel_id:0:12}" ]]
+          docker exec "$sentinel" test "$(docker exec "$sentinel" cat /data/sentinel)" = preserved
+          [[ "$(docker volume inspect --format '{{.Name}}' "$volume")" == "$volume" ]]
+
   release:
-    needs: [mes, windows-desktop]
+    needs: [mes, windows-desktop, rootless-host-provisioning]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -114,7 +168,7 @@ jobs:
           docker push "$image:${GITHUB_SHA}"
 
   deploy:
-    needs: [mes, windows-desktop, release]
+    needs: [mes, windows-desktop, rootless-host-provisioning, release]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.MES_DEPLOY_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20
