@@ -182,8 +182,12 @@ jobs:
           sudo env XDG_CONFIG_HOME=/root/mes-ci-inherited-config DOCKER_CONFIG=/root/mes-ci-inherited-docker bash infra/linux/provision-mes-rootless-host.sh --apply
           sudo bash infra/linux/provision-mes-rootless-host.sh --check
           sudo bash infra/linux/test-mes-host-isolation.sh
-          sudo -u mes-runtime -- git clone --no-hardlinks "$GITHUB_WORKSPACE" "$source_dir"
-          sudo -u mes-runtime -- git -C "$source_dir" checkout --detach "$GITHUB_SHA"
+          # Fetch public committed source without granting access to the runner home.
+          sudo -u mes-runtime -- env -i HOME=/var/lib/mes-runtime PATH=/usr/bin:/bin /usr/bin/git init "$source_dir"
+          sudo -u mes-runtime -- env -i HOME=/var/lib/mes-runtime PATH=/usr/bin:/bin /usr/bin/git -C "$source_dir" remote add origin https://github.com/Davis1233798/business-suite-mes.git
+          sudo -u mes-runtime -- env -i HOME=/var/lib/mes-runtime PATH=/usr/bin:/bin /usr/bin/git -C "$source_dir" fetch --depth=1 origin "$GITHUB_SHA"
+          sudo -u mes-runtime -- env -i HOME=/var/lib/mes-runtime PATH=/usr/bin:/bin /usr/bin/git -C "$source_dir" checkout --detach FETCH_HEAD
+          test "$(sudo -u mes-runtime -- env -i HOME=/var/lib/mes-runtime PATH=/usr/bin:/bin /usr/bin/git -C "$source_dir" rev-parse HEAD)" = "$GITHUB_SHA"
           runtime_uid="$(id -u mes-runtime)"
           sudo -u mes-runtime -- env -i \
             HOME="$(getent passwd mes-runtime | cut -d: -f6)" PATH=/usr/bin:/bin \
