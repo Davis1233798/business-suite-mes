@@ -3,7 +3,7 @@
 set -Eeuo pipefail
 umask 077
 
-readonly VERSION='business-suite-mes/host-provisioner/v1'
+readonly MES_PROVISIONER_VERSION='business-suite-mes/host-provisioner/v1'
 readonly STATE='/etc/mes-oci-provisioner'
 readonly STATE_MARKER="$STATE/owner"
 readonly MES_ROOT='/srv/business-suite-mes'
@@ -108,7 +108,7 @@ managed_state=0
 if exists_path "$STATE"; then
   root_owned_dir "$STATE" 750 || fail "$STATE exists with foreign ownership or mode"
   owned_regular "$STATE_MARKER" || fail 'host provisioner marker is missing, unsafe, or foreign'
-  [[ $(cat "$STATE_MARKER") == "$VERSION" ]] || fail 'host provisioner marker has an unknown owner/version'
+  [[ $(cat "$STATE_MARKER") == "$MES_PROVISIONER_VERSION" ]] || fail 'host provisioner marker has an unknown owner/version'
   managed_state=1
 fi
 
@@ -224,7 +224,7 @@ fi
 
 trap 'rc=$?; if (( rc != 0 )); then printf "Provisioning stopped (status %s); no broad cleanup was attempted. Inspect %s and rerun --check after repair.\n" "$rc" "$STATE" >&2; fi' EXIT
   install -d -o root -g root -m 0750 "$STATE"
-  printf '%s\n' "$VERSION" > "$STATE_MARKER"
+  printf '%s\n' "$MES_PROVISIONER_VERSION" > "$STATE_MARKER"
   chown root:root "$STATE_MARKER"; chmod 0444 "$STATE_MARKER"
 
   apt-get update
