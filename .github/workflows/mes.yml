@@ -127,6 +127,12 @@ jobs:
           ! docker volume inspect "$volume" >/dev/null 2>&1
           [[ ! -e /srv/business-suite && ! -L /srv/business-suite ]]
           cleanup() {
+            local failed_status=$?
+            if (( failed_status != 0 )); then
+              for diagnostic in "$port_check_log" "$port_probe_log"; do
+                if [[ -f "$diagnostic" && ! -L "$diagnostic" ]]; then tail -n 100 -- "$diagnostic" >&2; fi
+              done
+            fi
             if [[ -n "$port_probe_pid" ]]; then kill "$port_probe_pid" >/dev/null 2>&1 || true; fi
             docker rm -f "$sentinel" >/dev/null 2>&1 || true
             docker volume rm "$volume" >/dev/null 2>&1 || true
