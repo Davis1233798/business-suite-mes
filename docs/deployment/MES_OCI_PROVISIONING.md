@@ -4,6 +4,8 @@
 
 它會保留已運作的 rootful `docker.io` daemon、socket、container、volume、image 和 package。不得停用、重啟、升級、替換 rootful Docker；不得加入 `docker` 群組；不得安裝會與 Ubuntu `docker.io` / `rootlesskit` 衝突的 `docker-ce-rootless-extras`。Rootless daemon 使用現有 Docker Engine 29.x 及本 repo 固定的 Moby `docker-v29.1.3` rootless setup scripts。Ubuntu 的 `rootlesskit` 必須位於 `/usr/bin/rootlesskit`，由 Ubuntu AppArmor profile 授權 user namespace。Provisioner 不停用 AppArmor、不調低全機 user namespace 限制，也不以全域 `sysctl` 覆蓋安全政策。
 
+Provisioner 只透過 Ubuntu 套件安裝 `acl`, `apparmor`, `dbus-user-session`, `rootlesskit`, `slirp4netns`, `uidmap`。首次 `--check` 以既有 apt package index 執行模擬，不更新 index；`--apply` 才執行 `apt-get update` 並安裝這些套件。預檢分別確認 `/var/lib`（`mes-runtime` rootless Docker data）及 `/srv`（MES releases）所在檔案系統各有至少 8 GiB 可用空間；rootful Docker 的 data filesystem 可能不同，因此不以它代替這兩項檢查。
+
 ## 權限邊界
 
 - `mes-runtime` 與 `mes-deploy` 是不同的 system account、私有 home 與 primary group。`mes-runtime` 無 sudo、無 `docker` 群組、無 rootful socket 權限；user daemon 以 linger 在開機後運行。其 Docker API 僅由 runtime UID 的 `/run/user/<uid>/docker.sock` 提供。
@@ -15,7 +17,7 @@
 
 ## 操作順序
 
-先在維護時段確認實際主機、rootful Docker 29.x、Compose v2、磁碟容量、既有 `/srv/business-suite` ACL 與 18095 loopback port；不要把此腳本指向其他主機。先預覽檢查：
+先在維護時段確認實際主機、rootful Docker 29.x、Compose v2、磁碟容量、既有 `/srv/business-suite` ACL 與 18095 loopback port；不要把此腳本指向其他主機。完整主機已管理時，重跑 `--apply` 會先執行稽核後直接返回，不會重啟 daemon。先預覽檢查：
 
 ```bash
 sudo bash infra/linux/provision-mes-rootless-host.sh --check
@@ -34,8 +36,14 @@ sudo bash infra/linux/provision-mes-rootless-host.sh --check
 sudo bash infra/linux/test-mes-host-isolation.sh
 ```
 
-此處不建立或安裝部署 SSH key、不開啟 `MES_DEPLOY_ENABLED`、不設定 GitHub secrets，也不切換公開路由。部署啟用仍須完成 GitHub Environment 核准與實際 host key 驗證。若 provisioner 中途失敗，保留診斷狀態並修復後重新跑 `--check`；不會自動刪除帳號、ACL、套件、Docker 資料或 rollback 共享資源。
+Provisioner 不會建立部署 SSH key，也不會開啟 `MES_DEPLOY_ENABLED`、設定 GitHub secrets 或切換公開路由。部署啟用仍須完成 GitHub Environment 核准與實際 host key 驗證。若 provisioner 中途失敗，保留診斷狀態；不會自動刪除帳號、ACL、套件、Docker 資料或 rollback 共享資源。管理 marker 代表此主機曾開始由 provisioner 管理，不保證中途失敗時已完成。未完成狀態會拒絕自動重跑；維運人員須比對 root marker、ACL 備份、SSH 備份與服務實況後人工修復，再使用 `--check`。不得刪除 marker 來強制重跑。
 
 ## 驗收
 
-GitHub Actions 的 disposable `ubuntu-24.04-arm` job 在隔離 VM 上執行 `--check` 和 `--apply`，同時保留 rootful Docker sentinel 容器與 volume；再驗證 rootless service、AppArmor、UID/GID mapping、帳號隔離、共享樹 ACL 拒絕，以及 MES test-only Compose project 的建置、health、資料持久與 rollback。該 job 不使用 OCI secrets，不在 production OCI 執行清理型測試，也不註冊為 self-hosted runner。Production 是否部署仍由既有 `mes-production` GitHub Environment gated workflow 控制。
+GitHub Actions 的 disposable `ubuntu-24.04-arm` job 在隔離 VM 上執行 `--check` 和連續兩次 `--apply`，同時保留 rootful Docker sentinel 容器與 volume；第二次套用必須只稽核並返回，不重啟或替換服務。接著驗證 rootless service、AppArmor、UID/GID mapping、帳號隔離、共享樹 ACL 拒絕，以及 MES test-only Compose project 的建置、health、資料持久與 rollback。該 job 不使用 OCI secrets，不在 production OCI 執行清理型測試，也不註冊為 self-hosted runner。Production 是否部署仍由既有 `mes-production` GitHub Environment gated workflow 控制。
+
+## 上游依據
+
+- Docker 的 [rootless troubleshooting](https://docs.docker.com/engine/security/rootless/troubleshoot/) 說明 Ubuntu 24.04 預設限制 unprivileged user namespaces，並要求以 AppArmor profile 授權；不要求停用整體保護。
+- Ubuntu Noble 的 [apparmor package file list](https://packages.ubuntu.com/noble/all/apparmor/filelist) 包含 `/etc/apparmor.d/rootlesskit`。
+- Rootless setup scripts 與授權文字固定於 Moby [`docker-v29.1.3`](https://github.com/moby/moby/tree/docker-v29.1.3/contrib) tag；來源 revision 與 SHA-256 列於 `infra/linux/rootless-vendor/SOURCE.md`。

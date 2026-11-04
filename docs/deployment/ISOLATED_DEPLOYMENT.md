@@ -26,34 +26,25 @@ Compose project、volume 與 loopback port 在正式環境不可覆寫；部署�
 
 ## 主機前置條件及權限
 
-- 既有 OCI Linux 主機已安裝 rootless Docker Engine/Compose v2、Bash、Python 3、`flock`、`sha256sum`、`tar`、`curl`。
-- 維運人員需建立互相隔離的 `mes-deploy` 與 `mes-runtime` 帳號。`mes-runtime` 擁有自己的 rootless Docker daemon、MES project 和資料；`mes-deploy` 沒有 Docker 權限、沒有 runtime home/data 存取權，也不能互動登入。不要將任何帳號加入 rootful `docker` 群組。
-- 將 `infra/linux/mes-deploy-gateway.py` 安裝為 root-owned、不可由兩個 service account 修改的 `/usr/local/sbin/mes-deploy-gateway`；`infra/linux/mes-deploy.sudoers` 僅允許 `mes-deploy` 以 root 執行這支固定檔案。將 `infra/linux/sshd-mes-deploy.conf` 的 `Match User mes-deploy` 設定放在 sshd 有效設定的最後，並停用 TTY、TCP/stream-local/agent forwarding、X11、密碼和 user rc。以 `sshd -T -C user=mes-deploy,host=<host>,addr=<runner-ip>` 核對 effective policy。Gateway 只允許 `status`、`deploy <sha> <digest>`，且只以 `runuser -u mes-runtime` 啟動受控發布程序；不得接受任意命令、路徑、Compose project、volume 或 port。
-- 維運人員預先建立 `/srv/business-suite-mes`、`releases/`、`staging/` 及內容恰為 `business-suite-mes/v1` 的 `.mes-deploy-owner` marker。`/srv/business-suite-mes` 與 `staging/` 由 `mes-runtime` 私有擁有；runtime 負責 staging archive 的存取與清理。Root gateway 的短期 inbox 位於 `/run/mes-deploy-inbox`，權限為 `root:mes-runtime`、`0710`，只提供 runtime 目錄穿越與讀取 root 建立之交付檔案的權限，不允許 runtime 改動 inbox；gateway 先在這個 root-controlled 路徑寫完並驗證上傳，再以 runtime 身分將檔案複製入 staging。部署 helper 從已校驗的 main archive 解出後，以 `mes-runtime` 身分執行。資料 volume 由 `mes-runtime` 的 rootless daemon 管理；不得指向共用 Docker socket 或任何共享資料目錄。
-- 專用 GitHub Environment `mes-production` 提供專屬 `MES_DEPLOY_TARGET`、`MES_DEPLOY_KEY`、經帶外核對的 `MES_DEPLOY_HOST_KEY`，及 repository variable `MES_DEPLOY_ENABLED=true`。不得重用中央 `OCI_*` secrets。私鑰/憑證值不得傳給部署腳本參數或輸出到日誌。
+- OCI 主機須為 Ubuntu 24.04 ARM64，使用已運作的 rootful Docker Engine 29.x 及 Compose v2、systemd/cgroup v2，並啟用 AppArmor user-namespace 限制。以 `bash infra/linux/provision-mes-rootless-host.sh --check` 唯讀檢查前置條件，再依維運核准執行 `--apply`。Provisioner 分別檢查 `/var/lib` rootless Docker data 與 `/srv` MES releases 所在檔案系統各有至少 8 GiB 可用空間；它只安裝 Ubuntu `acl`, `apparmor`, `dbus-user-session`, `rootlesskit`, `slirp4netns`, `uidmap` 套件，不替換或重啟既有 Docker daemon。
+- Provisioner 建立互相隔離的 `mes-deploy` 與 `mes-runtime` 帳號、私有 home、rootless Docker daemon、固定 gateway/sudoers/SSH policy 與 MES 專屬目錄。它只在 `/srv/business-suite` 根目錄加上兩個 UID 的明確 deny ACL，不遞迴改寫 portfolio tree。不要將任何帳號加入 rootful `docker` 群組。
+- Dedicated GitHub Environment `mes-production` 可在主機建立並通過唯讀稽核後，另行管理專屬 `MES_DEPLOY_TARGET`、`MES_DEPLOY_KEY`、經帶外核對的 `MES_DEPLOY_HOST_KEY`，及 repository variable `MES_DEPLOY_ENABLED=true`。Provisioner 不配置 SSH key、不設定 secrets/變數。不得重用中央 `OCI_*` secrets；私鑰/憑證值不得傳給部署腳本參數或輸出到日誌。
 - staging archive 來源只允許受信任 `main` workflow；確認 GitHub Environment 核准者、主機網路政策與 SSH host key 後，才可設定啟用變數。
-- 首次部署前人工確認 release root owner marker、磁碟空間、Docker project/volume 名稱沒有既有衝突，以及 loopback port 空閒。部署器不會清理共享資源或自動建立 owner marker。
+- 首次部署前人工確認 rootless runtime、rootful Docker sentinel/資料、磁碟空間、Docker project/volume 名稱沒有既有衝突，以及 loopback port 空閒。部署器不會清理共享資源或接管既有 owner marker。
 
 ## 操作與遠端安全驗收
 
-由維運人員將 root-owned gateway、sudoers 規則和 SSH 限制檔安裝到既有 OCI host；先以 `visudo -cf /etc/sudoers.d/mes-deploy` 與 `sshd -t` 驗證設定，再 reload sshd。`mes-runtime` 需啟用 user linger 並啟動自己的 rootless Docker daemon。部署資料夾與 marker 的參考建立方式如下，僅建立 MES 專屬路徑，不更動 portfolio 檔案或服務：
+在乾淨 checkout 的 repo 根目錄，以 root 執行唯讀預檢及明確套用命令。Provisioner 對未知帳號、路徑或 marker 會拒絕接管；它不會建立 SSH key，也不會啟用 GitHub deployment。完整流程、目前主機假設與安全邊界見 [`MES_OCI_PROVISIONING.md`](MES_OCI_PROVISIONING.md)。
 
 ```bash
-sudo install -d -m 0750 -o mes-runtime -g mes-runtime /srv/business-suite-mes /srv/business-suite-mes/releases /srv/business-suite-mes/staging
-sudo install -d -m 0710 -o root -g mes-runtime /run/mes-deploy-inbox
-printf 'business-suite-mes/v1\n' | sudo tee /srv/business-suite-mes/.mes-deploy-owner
-sudo chmod 0444 /srv/business-suite-mes/.mes-deploy-owner
-sudo -u mes-runtime env XDG_RUNTIME_DIR=/run/user/"$(id -u mes-runtime)" DOCKER_HOST=unix:///run/user/"$(id -u mes-runtime)"/docker.sock docker info --format '{{json .SecurityOptions}}'
+sudo bash infra/linux/provision-mes-rootless-host.sh --check
+sudo bash infra/linux/provision-mes-rootless-host.sh --apply
+sudo bash infra/linux/provision-mes-rootless-host.sh --apply
+sudo bash infra/linux/provision-mes-rootless-host.sh --check
+sudo bash infra/linux/test-mes-host-isolation.sh
 ```
 
-Gateway 檔案請安裝為 `root:root` mode `0750`，sudoers 檔案 `root:root` mode `0440`。Forced command 會用 sudo 把原始 SSH 命令作單一參數傳給 gateway；不允許 scp/SFTP 或遠端 shell。Deploy public key 與 `mes-deploy` 帳號設定只由維運人員透過 host provisioning 完成。可用下列命令部署並檢查程式檔案；實際 host 變更需在既有 OCI host 維護流程內執行：
-
-```bash
-sudo install -o root -g root -m 0750 infra/linux/mes-deploy-gateway.py /usr/local/sbin/mes-deploy-gateway
-sudo install -o root -g root -m 0440 infra/linux/mes-deploy.sudoers /etc/sudoers.d/mes-deploy
-sudo visudo -cf /etc/sudoers.d/mes-deploy
-sudo sshd -t
-```
+若套用中途失敗，工具保留已建立的 root marker、ACL 備份與其他狀態，不執行廣泛清理或自動回復。部分套用狀態不會被當成可重新套用的乾淨主機；先由維運人員比對 marker/ACL/SSH 備份及實際服務，再人工修復。不得直接刪除 marker 來強制重跑。
 
 在加入 GitHub Environment secrets 前，以 root 在目標 OCI 主機執行 `sudo bash infra/linux/test-mes-host-isolation.sh`。這是唯讀主機稽核，確認 deploy/runtime 帳號邊界、rootless daemon、SSH forced command、固定路徑，以及 portfolio `/srv/business-suite`（若存在）對 MES 帳號的讀取和穿越拒絕。若探針不能明確確認拒絕，稽核會失敗；不得在未通過稽核時啟用部署。
 

@@ -13,6 +13,7 @@ for value in (
     "mes-runtime", "mes-deploy", "business-suite-mes/host-provisioner/v1",
     "business-suite-mes/v1", "subuid", "subgid", "setfacl", "rootless",
     "loginctl", "enable-linger", "/run/mes-deploy-inbox", "0710",
+    "for target_fs in /var/lib /srv", "df --output=avail -k", "8 * 1024 * 1024",
     "mes-deploy-gateway", "sshd -T", "sshd -t", "visudo -cf",
 ):
     if value not in provisioner:
@@ -44,11 +45,13 @@ for value in (
 ):
     if value not in job:
         raise SystemExit(f"Disposable ARM64 acceptance job is missing {value}")
+if job.count("provision-mes-rootless-host.sh --apply") < 2:
+    raise SystemExit("Disposable ARM64 acceptance must prove a repeated --apply is idempotent")
 for value in ("needs: [mes, windows-desktop, rootless-host-provisioning]",):
     if value not in workflow:
         raise SystemExit(f"Release gates do not include rootless acceptance: {value}")
 
-for value in ("--check", "--apply", "rootful", "AppArmor", "ubuntu-24.04-arm", "不會建立部署 SSH key"):
+for value in ("--check", "--apply", "rootful", "AppArmor", "ubuntu-24.04-arm", "不會建立部署 SSH key", "/var/lib", "/srv", "重跑 `--apply`"):
     if value not in docs:
         raise SystemExit(f"Provisioning documentation is missing {value}")
 

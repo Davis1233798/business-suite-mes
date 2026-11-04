@@ -71,6 +71,8 @@ jobs:
         run: python3 infra/linux/test-mes-gateway.py
       - name: Verify deployment workflow boundary contract
         run: python3 infra/linux/test-mes-workflow-contract.py
+      - name: Verify OCI rootless provisioner boundary contract
+        run: python3 infra/linux/test-mes-provisioner-contract.py
 
   rootless-host-provisioning:
     runs-on: ubuntu-24.04-arm
@@ -79,6 +81,10 @@ jobs:
       contents: read
     steps:
       - uses: actions/checkout@v4
+      - name: Prepare SSH parser for the forced-command acceptance check
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openssh-server
       - name: Provision rootless MES beside an unchanged rootful Docker sentinel
         shell: bash
         run: |
@@ -111,16 +117,18 @@ jobs:
           printf 'portfolio sentinel\n' | sudo tee /srv/business-suite/provisioner-ci-sentinel >/dev/null
           sudo bash infra/linux/provision-mes-rootless-host.sh --check
           sudo bash infra/linux/provision-mes-rootless-host.sh --apply
+          # A second apply must audit and return without disrupting either daemon.
+          sudo bash infra/linux/provision-mes-rootless-host.sh --apply
           sudo bash infra/linux/provision-mes-rootless-host.sh --check
           sudo bash infra/linux/test-mes-host-isolation.sh
-          sudo install -d -m 0700 -o mes-runtime -g mes-runtime "$source_dir"
-          git archive --format=tar "$GITHUB_SHA" | sudo -u mes-runtime -- tar -xf - -C "$source_dir"
+          sudo -u mes-runtime -- git clone --no-hardlinks "$GITHUB_WORKSPACE" "$source_dir"
+          sudo -u mes-runtime -- git -C "$source_dir" checkout --detach "$GITHUB_SHA"
           runtime_uid="$(id -u mes-runtime)"
-          sudo -u mes-runtime env \
+          sudo -u mes-runtime -- env \
             HOME="$(getent passwd mes-runtime | cut -d: -f6)" \
             XDG_RUNTIME_DIR="/run/user/$runtime_uid" \
             DOCKER_HOST="unix:///run/user/$runtime_uid/docker.sock" \
-            bash "$source_dir/infra/linux/test-mes-deployment.sh"
+            bash -c 'cd "$1" && exec bash infra/linux/test-mes-deployment.sh' _ "$source_dir"
           [[ "$(docker info --format '{{.ServerVersion}}')" == "$engine_version" ]]
           [[ "$(docker ps --filter "name=^/${sentinel}$" --format '{{.ID}}')" == "${sentinel_id:0:12}" ]]
           docker exec "$sentinel" test "$(docker exec "$sentinel" cat /data/sentinel)" = preserved
