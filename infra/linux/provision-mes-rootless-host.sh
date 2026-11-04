@@ -202,7 +202,7 @@ if (( managed_state )); then
   aa-status | grep -Fq rootlesskit || fail 'Ubuntu rootlesskit AppArmor profile is not loaded'
   runtime_uid=$(id -u "$RUNTIME")
   [[ -S "/run/user/$runtime_uid/docker.sock" && $(stat -c '%U:%a' "/run/user/$runtime_uid/docker.sock") == "$RUNTIME:600" ]] || fail 'managed rootless Docker socket is unavailable or unsafe'
-  rootless_security=$(runuser -u "$RUNTIME" -- env -i HOME=/var/lib/mes-runtime XDG_RUNTIME_DIR="/run/user/$runtime_uid" DOCKER_HOST="unix:///run/user/$runtime_uid/docker.sock" docker info --format '{{json .SecurityOptions}}' 2>/dev/null) || fail 'managed rootless Docker daemon is unavailable'
+  rootless_security=$(if ! runuser -u "$RUNTIME" -- env -i HOME=/var/lib/mes-runtime XDG_RUNTIME_DIR="/run/user/$runtime_uid" DOCKER_HOST="unix:///run/user/$runtime_uid/docker.sock" docker info --format '{{json .SecurityOptions}}' 2>/dev/null) || fail 'managed rootless Docker daemon is unavailable'
   [[ $rootless_security == *'"name=rootless"'* ]] || fail 'MES Docker daemon is not rootless'
   [[ $(systemctl is-active docker.service) == active && $(docker info --format '{{.ServerVersion}}') == "$server_version" ]] || fail 'rootful Docker service/version changed'
   note 'Managed host marker found; auditing the existing installation.'
@@ -314,7 +314,12 @@ runuser -u "$RUNTIME" -- env -i \
   XDG_RUNTIME_DIR="/run/user/$runtime_uid" \
   DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$runtime_uid/bus" \
   PATH="$ROOTLESS_BIN:/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin" \
-  "$ROOTLESS_BIN/dockerd-rootless-setuptool.sh" install --force
+  "$ROOTLESS_BIN/dockerd-rootless-setuptool.sh" install --force; then
+  # A system UID may not have permission to read its own user journal.
+  journalctl --no-pager -n 120 "_UID=$runtime_uid" >&2 || true
+  runuser -u "$RUNTIME" -- env -i HOME=/var/lib/mes-runtime PATH=/usr/bin:/bin XDG_RUNTIME_DIR="/run/user/$runtime_uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$runtime_uid/bus" /usr/bin/systemctl --user --no-pager --full status docker.service >&2 || true
+  fail 'rootless Docker installation failed; inspect the bounded system journal above'
+fi
 
 for attempt in $(seq 1 30); do
   if runuser -u "$RUNTIME" -- env -i HOME=/var/lib/mes-runtime XDG_RUNTIME_DIR="/run/user/$runtime_uid" DOCKER_HOST="unix:///run/user/$runtime_uid/docker.sock" docker info --format '{{json .SecurityOptions}}' 2>/dev/null | grep -q '"name=rootless"'; then break; fi
