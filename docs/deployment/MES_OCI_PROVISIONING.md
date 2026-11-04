@@ -53,3 +53,5 @@ Runtime commands use a clean environment with explicit private HOME, PATH and ro
 The runtime-owned docker.service drop-in pins HOME, XDG runtime/config/data/cache directories and Docker config to the MES account. It is written as mes-runtime before the vendor installer starts the service, so a user-manager environment inherited from a CI account cannot redirect daemon storage or sockets. Host acceptance checks the live daemon data root, not only installer arguments.
 
 The rootless daemon keeps its Docker socket mode at 0600 via an unprivileged systemd ExecStartPost after notify readiness. ARM acceptance restarts only that dedicated user daemon and audits the socket again; it must not relax socket permissions or restart the rootful portfolio daemon.
+
+ARM acceptance obtains public committed source through an unprivileged Git fetch into its own checkout and asserts HEAD equals the requested GitHub SHA. It does not grant access to the runner home, clone another user's private checkout, copy Git credentials or disable Git ownership checks.

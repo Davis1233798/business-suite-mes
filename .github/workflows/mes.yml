@@ -164,6 +164,7 @@ jobs:
             exit 1
           fi
           grep -Fq 'TCP port 18095 is already in use on an unmanaged host' "$port_check_log"
+          : > "$port_check_log"
           kill "$port_probe_pid"
           wait "$port_probe_pid" 2>/dev/null || true
           port_probe_pid=''
@@ -175,7 +176,7 @@ jobs:
           sudo test ! -e /root/mes-ci-inherited-config
           sudo test ! -e /root/mes-ci-inherited-docker
           runtime_uid=$(id -u mes-runtime)
-          sudo -u mes-runtime -- env -i HOME=/var/lib/mes-runtime PATH=/usr/bin:/bin XDG_RUNTIME_DIR="/run/user/$runtime_uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$runtime_uid/bus" /usr/bin/systemctl --user restart docker.service
+          sudo -u mes-runtime -- env -i -i HOME=/var/lib/mes-runtime PATH=/usr/bin:/bin XDG_RUNTIME_DIR="/run/user/$runtime_uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$runtime_uid/bus" /usr/bin/systemctl --user restart docker.service
           test "$(sudo stat -c '%U:%a' "/run/user/$runtime_uid/docker.sock")" = mes-runtime:600
           # A second apply must audit and return without disrupting either daemon.
           sudo env XDG_CONFIG_HOME=/root/mes-ci-inherited-config DOCKER_CONFIG=/root/mes-ci-inherited-docker bash infra/linux/provision-mes-rootless-host.sh --apply
@@ -184,8 +185,8 @@ jobs:
           sudo -u mes-runtime -- git clone --no-hardlinks "$GITHUB_WORKSPACE" "$source_dir"
           sudo -u mes-runtime -- git -C "$source_dir" checkout --detach "$GITHUB_SHA"
           runtime_uid="$(id -u mes-runtime)"
-          sudo -u mes-runtime -- env \
-            HOME="$(getent passwd mes-runtime | cut -d: -f6)" \
+          sudo -u mes-runtime -- env -i \
+            HOME="$(getent passwd mes-runtime | cut -d: -f6)" PATH=/usr/bin:/bin \
             XDG_RUNTIME_DIR="/run/user/$runtime_uid" \
             DOCKER_HOST="unix:///run/user/$runtime_uid/docker.sock" \
             bash -c 'cd "$1" && exec bash infra/linux/test-mes-deployment.sh' _ "$source_dir"
@@ -193,17 +194,17 @@ jobs:
           release_archive="/srv/business-suite-mes/staging/$GITHUB_SHA.tgz"
           sudo -u mes-runtime -- bash -c 'set -Eeuo pipefail; cd "$1"; git archive --format=tar "$2" | gzip -n > "$3"' _ "$source_dir" "$GITHUB_SHA" "$release_archive"
           release_digest="$(sha256sum "$release_archive" | cut -d' ' -f1)"
-          sudo -u mes-runtime -- env \
-            HOME=/var/lib/mes-runtime \
+          sudo -u mes-runtime -- env -i \
+            HOME=/var/lib/mes-runtime PATH=/usr/bin:/bin \
             XDG_RUNTIME_DIR="/run/user/$runtime_uid" \
             DOCKER_HOST="unix:///run/user/$runtime_uid/docker.sock" \
             bash -c 'cd "$1"; MES_REQUIRE_ROOTLESS_DOCKER=1 bash infra/linux/deploy-mes-release.sh "$2" "$3" "$4"' _ "$source_dir" "$GITHUB_SHA" "$release_digest" "$release_archive"
           curl --fail --silent --show-error http://127.0.0.1:18095/api/health | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["success"] is True and d["data"]["status"] == "ready", d'
           sudo bash infra/linux/provision-mes-rootless-host.sh --check
           echo 'Prove managed port conflicts are rejected'
-          managed_container="$(sudo -u mes-runtime -- env HOME=/var/lib/mes-runtime XDG_RUNTIME_DIR="/run/user/$runtime_uid" DOCKER_HOST="unix:///run/user/$runtime_uid/docker.sock" /usr/bin/docker ps -q --filter label=com.docker.compose.project=business-suite-mes --filter status=running)"
+          managed_container="$(sudo -u mes-runtime -- env -i HOME=/var/lib/mes-runtime XDG_RUNTIME_DIR="/run/user/$runtime_uid" DOCKER_HOST="unix:///run/user/$runtime_uid/docker.sock" /usr/bin/docker ps -q --filter label=com.docker.compose.project=business-suite-mes --filter status=running)"
           [[ "$(wc -w <<<"$managed_container" | tr -d ' ')" == 1 ]]
-          sudo -u mes-runtime -- env HOME=/var/lib/mes-runtime XDG_RUNTIME_DIR="/run/user/$runtime_uid" DOCKER_HOST="unix:///run/user/$runtime_uid/docker.sock" /usr/bin/docker stop "$managed_container" >/dev/null
+          sudo -u mes-runtime -- env -i HOME=/var/lib/mes-runtime XDG_RUNTIME_DIR="/run/user/$runtime_uid" DOCKER_HOST="unix:///run/user/$runtime_uid/docker.sock" /usr/bin/docker stop "$managed_container" >/dev/null
           python3 -m http.server 18095 --bind 127.0.0.1 >"$port_probe_log" 2>&1 &
           port_probe_pid=$!
           for attempt in $(seq 1 20); do
@@ -219,7 +220,7 @@ jobs:
           kill "$port_probe_pid"
           wait "$port_probe_pid" 2>/dev/null || true
           port_probe_pid=''
-          sudo -u mes-runtime -- env HOME=/var/lib/mes-runtime XDG_RUNTIME_DIR="/run/user/$runtime_uid" DOCKER_HOST="unix:///run/user/$runtime_uid/docker.sock" /usr/bin/docker start "$managed_container" >/dev/null
+          sudo -u mes-runtime -- env -i HOME=/var/lib/mes-runtime XDG_RUNTIME_DIR="/run/user/$runtime_uid" DOCKER_HOST="unix:///run/user/$runtime_uid/docker.sock" /usr/bin/docker start "$managed_container" >/dev/null
           curl --fail --silent --show-error --retry 15 --retry-connrefused --retry-delay 2 http://127.0.0.1:18095/api/health | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["success"] is True and d["data"]["status"] == "ready", d'
           sudo bash infra/linux/provision-mes-rootless-host.sh --check
           sudo env XDG_CONFIG_HOME=/root/mes-ci-inherited-config DOCKER_CONFIG=/root/mes-ci-inherited-docker bash infra/linux/provision-mes-rootless-host.sh --apply
