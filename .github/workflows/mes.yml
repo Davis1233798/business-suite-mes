@@ -53,7 +53,7 @@ jobs:
       - run: go -C backend test -race -timeout=20m ./...
       - run: npm run web:build
       - name: Build MES image
-        run: docker build -f infra/linux/Dockerfile.station -t mes-ci:${GITHUB_SHA} .
+        run: docker build --build-arg SUITE_RELEASE_SHA=${GITHUB_SHA} -f infra/linux/Dockerfile.station -t mes-ci:${GITHUB_SHA} .
       - name: Smoke-test isolated MES image
         run: |
           set -euo pipefail
@@ -63,7 +63,7 @@ jobs:
             if curl --fail --silent http://127.0.0.1:18095/api/health > /dev/null; then break; fi
             sleep 2
           done
-          curl --fail --silent http://127.0.0.1:18095/api/health > /dev/null
+          curl --fail --silent http://127.0.0.1:18095/api/health | python3 -c 'import json,os,sys; d=json.load(sys.stdin); assert d["data"]["revision"] == os.environ["GITHUB_SHA"], d'
           test "$(curl --silent -o /dev/null -w '%{http_code}' http://127.0.0.1:18095/erp/login)" = 404
       - name: Verify isolated deployment and rollback
         run: bash infra/linux/test-mes-deployment.sh
@@ -109,7 +109,7 @@ jobs:
         run: |
           set -euo pipefail
           image="ghcr.io/${GITHUB_REPOSITORY_OWNER,,}/business-suite-mes"
-          docker build -f infra/linux/Dockerfile.station -t "$image:${GITHUB_SHA}" .
+          docker build --build-arg SUITE_RELEASE_SHA=${GITHUB_SHA} -f infra/linux/Dockerfile.station -t "$image:${GITHUB_SHA}" .
           printf '%s' "$GHCR_TOKEN" | docker login ghcr.io -u "$GITHUB_ACTOR" --password-stdin
           docker push "$image:${GITHUB_SHA}"
 
