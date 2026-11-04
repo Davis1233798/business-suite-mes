@@ -146,6 +146,17 @@ def open_deploy_lock():
     return fd
 
 
+def validate_service_health(response, image):
+    image_match = re.fullmatch(r"business-suite-mes-station:([0-9a-f]{40})", image)
+    data = response.get("data") if isinstance(response, dict) else None
+    if not image_match or not isinstance(data, dict) or response.get("success") is not True:
+        raise GatewayError("loopback MES health response or image identity is invalid")
+    revision = image_match.group(1)
+    if data.get("backend") != "go" or data.get("status") != "ready" or data.get("revision") != revision:
+        raise GatewayError("loopback MES health does not match the running image revision")
+    return revision
+
+
 def check_status():
     assert_host_boundary()
     assert_rootless()
@@ -185,13 +196,19 @@ def check_status():
         ).stdout.strip()
         if service != "mes-station" or health != "healthy" or state != "running" or published != f"127.0.0.1:{PORT}":
             raise GatewayError("MES service identity or health check failed")
+        image = runtime(
+            "/usr/bin/docker", "inspect", "--format", "{{.Config.Image}}", container,
+            capture_output=True, text=True,
+        ).stdout.strip()
         try:
             with urllib.request.urlopen(f"http://127.0.0.1:{PORT}/api/health", timeout=4) as response:
-                health_json = json.load(response)
+                payload = response.read(65537)
+                if len(payload) > 65536:
+                    raise GatewayError("loopback MES health response exceeds its size limit")
+                health_json = json.loads(payload)
         except Exception as exc:
             raise GatewayError("loopback MES health endpoint is unavailable") from exc
-        if health_json.get("success") is not True or health_json.get("data") != {"backend": "go", "status": "ready"}:
-            raise GatewayError("loopback MES health response is invalid")
+        validate_service_health(health_json, image)
     print(json.dumps({"protocol": 1, "ready": True, "runtime_user": "mes-runtime", "docker_mode": "rootless", "project": PROJECT, "data_volume": VOLUME, "port": f"127.0.0.1:{PORT}"}, separators=(",", ":")))
 
 
