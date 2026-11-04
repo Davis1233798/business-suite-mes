@@ -64,6 +64,7 @@ case "$1" in --check) MODE=check ;; --apply) MODE=apply ;; *) usage >&2; exit 2 
 for path in /usr/bin/apt-get /usr/bin/apt-cache /usr/bin/getent /usr/sbin/visudo /usr/sbin/sshd /usr/sbin/runuser /usr/bin/python3; do
   [[ -x "$path" ]] || fail "required Ubuntu command missing: $path"
 done
+/usr/sbin/sshd -t || fail 'existing SSH configuration/runtime is invalid; no provisioning changes made'
 [[ -f "$VENDOR/dockerd-rootless.sh" && -f "$VENDOR/dockerd-rootless-setuptool.sh" && -f "$VENDOR/LICENSE" && -f "$VENDOR/SOURCE.md" ]] || fail 'pinned rootless vendor files are incomplete'
 printf '%s  %s\n' \
   '8eb00d61b5e78ffc0dcd628f056389b5859cc61d6fe3ce17b4a3a4b08143c8a5' "$VENDOR/dockerd-rootless.sh" \

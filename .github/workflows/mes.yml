@@ -106,6 +106,10 @@ jobs:
         run: |
           sudo apt-get update
           sudo apt-get install -y openssh-server
+          # Package installation does not start sshd on the disposable runner.
+          [[ ! -L /run/sshd ]]
+          sudo install -d -o root -g root -m 0755 /run/sshd
+          sudo /usr/sbin/sshd -t
       - name: Provision rootless MES beside an unchanged rootful Docker sentinel
         shell: bash
         run: |
