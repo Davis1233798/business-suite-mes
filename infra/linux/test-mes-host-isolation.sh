@@ -61,6 +61,9 @@ runtime_dir="/run/user/$runtime_uid"
 security=$(runuser -u mes-runtime -- env -i PATH=/usr/bin:/bin HOME="$(getent passwd mes-runtime | cut -d: -f6)" XDG_RUNTIME_DIR="$runtime_dir" DOCKER_HOST="unix://$runtime_dir/docker.sock" docker info --format '{{json .SecurityOptions}}')
 [[ "$security" == *'"name=rootless"'* ]] || fail 'mes-runtime is connected to a rootful Docker daemon'
 
+rootless_data=$(runuser -u mes-runtime -- env -i PATH=/usr/bin:/bin HOME="$(getent passwd mes-runtime | cut -d: -f6)" XDG_RUNTIME_DIR="$runtime_dir" DOCKER_HOST="unix://$runtime_dir/docker.sock" /usr/bin/docker info --format '{{.DockerRootDir}}')
+[[ "$rootless_data" == /var/lib/mes-runtime/.local/share/docker ]] || fail 'rootless Docker data escaped the private MES home'
+
 effective=$(sshd -T -C "user=mes-deploy,host=$(hostname -f),addr=127.0.0.1")
 grep -Fq 'forcecommand /usr/bin/sudo -n /usr/local/sbin/mes-deploy-gateway "$SSH_ORIGINAL_COMMAND"' <<<"$effective" || fail 'effective SSH ForceCommand is not the gateway'
 grep -Fq 'permittty no' <<<"$effective" || fail 'SSH TTY must be disabled'

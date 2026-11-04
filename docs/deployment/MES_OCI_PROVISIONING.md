@@ -49,3 +49,5 @@ GitHub Actions 的 disposable `ubuntu-24.04-arm` job 在 runner VM 上先移除�
 - Rootless setup scripts 與授權文字固定於 Moby [`docker-v29.1.3`](https://github.com/moby/moby/tree/docker-v29.1.3/contrib) tag；來源 revision 與 SHA-256 列於 `infra/linux/rootless-vendor/SOURCE.md`。
 
 Runtime commands use a clean environment with explicit private HOME, PATH and rootless socket/runtime paths. Caller XDG and Docker configuration must not redirect mes-runtime into the operator or CI home. ARM64 acceptance supplies inaccessible caller config paths and verifies they are never created.
+
+The runtime-owned docker.service drop-in pins HOME, XDG runtime/config/data/cache directories and Docker config to the MES account. It is written as mes-runtime before the vendor installer starts the service, so a user-manager environment inherited from a CI account cannot redirect daemon storage or sockets. Host acceptance checks the live daemon data root, not only installer arguments.
