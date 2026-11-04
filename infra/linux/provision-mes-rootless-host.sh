@@ -322,6 +322,7 @@ Environment=XDG_DATA_HOME=/var/lib/mes-runtime/.local/share
 Environment=XDG_CACHE_HOME=/var/lib/mes-runtime/.cache
 Environment=DOCKER_CONFIG=/var/lib/mes-runtime/.docker
 UnsetEnvironment=DOCKER_HOST DOCKER_CONTEXT DOCKER_TLS_VERIFY DOCKER_CERT_PATH DOCKER_API_VERSION
+ExecStartPost=/usr/bin/chmod 0600 /run/user/$runtime_uid/docker.sock
 EOF
 if ! runuser -u "$RUNTIME" -- env -i \
   HOME=/var/lib/mes-runtime USER="$RUNTIME" LOGNAME="$RUNTIME" \
