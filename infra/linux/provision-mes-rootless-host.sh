@@ -309,6 +309,20 @@ aa-status | grep -Fq rootlesskit || fail 'Ubuntu rootlesskit AppArmor profile is
 loginctl enable-linger "$RUNTIME"
 for attempt in $(seq 1 20); do [[ -S "/run/user/$runtime_uid/bus" ]] && break; sleep 1; done
 [[ -S "/run/user/$runtime_uid/bus" ]] || fail 'runtime user systemd bus did not appear after enabling linger'
+# Write service policy as the unprivileged account, never as root in its home.
+runuser -u "$RUNTIME" -- env -i HOME=/var/lib/mes-runtime PATH=/usr/bin:/bin /usr/bin/install -d -m 0700 /var/lib/mes-runtime/.config/systemd/user/docker.service.d
+runuser -u "$RUNTIME" -- env -i HOME=/var/lib/mes-runtime PATH=/usr/bin:/bin /bin/sh -c 'umask 077; cat > "$HOME/.config/systemd/user/docker.service.d/mes-environment.conf"' <<EOF
+[Service]
+Environment=HOME=/var/lib/mes-runtime
+Environment=USER=mes-runtime
+Environment=LOGNAME=mes-runtime
+Environment=XDG_RUNTIME_DIR=/run/user/$runtime_uid
+Environment=XDG_CONFIG_HOME=/var/lib/mes-runtime/.config
+Environment=XDG_DATA_HOME=/var/lib/mes-runtime/.local/share
+Environment=XDG_CACHE_HOME=/var/lib/mes-runtime/.cache
+Environment=DOCKER_CONFIG=/var/lib/mes-runtime/.docker
+UnsetEnvironment=DOCKER_HOST DOCKER_CONTEXT DOCKER_TLS_VERIFY DOCKER_CERT_PATH DOCKER_API_VERSION
+EOF
 if ! runuser -u "$RUNTIME" -- env -i \
   HOME=/var/lib/mes-runtime USER="$RUNTIME" LOGNAME="$RUNTIME" \
   XDG_RUNTIME_DIR="/run/user/$runtime_uid" \
