@@ -68,3 +68,7 @@ for value in ("--check", "--apply", "rootful", "AppArmor", "ubuntu-24.04-arm", "
         raise SystemExit(f"Provisioning documentation is missing {value}")
 
 print("MES rootless host provisioning contract passed.")
+
+# The marker identifier must not collide with VERSION from Ubuntu /etc/os-release.
+assert "readonly MES_PROVISIONER_VERSION=" in provisioner
+assert "readonly VERSION=" not in provisioner
