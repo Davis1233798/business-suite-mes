@@ -222,10 +222,22 @@ jobs:
             exit 1
           fi
           grep -Fq 'TCP port 18095 is occupied without exactly one managed MES container' "$port_check_log"
+          : > "$port_check_log"
           kill "$port_probe_pid"
           wait "$port_probe_pid" 2>/dev/null || true
           port_probe_pid=''
           sudo -u mes-runtime -- env -i HOME=/var/lib/mes-runtime XDG_RUNTIME_DIR="/run/user/$runtime_uid" DOCKER_HOST="unix:///run/user/$runtime_uid/docker.sock" /usr/bin/docker start "$managed_container" >/dev/null
+          echo 'Wait for Docker health after the managed-port negative fixture'
+          for attempt in $(seq 1 45); do
+            service_health="$(sudo -u mes-runtime -- env -i HOME=/var/lib/mes-runtime XDG_RUNTIME_DIR="/run/user/$runtime_uid" DOCKER_HOST="unix:///run/user/$runtime_uid/docker.sock" /usr/bin/docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$managed_container")"
+            if [[ "$service_health" == healthy ]]; then break; fi
+            if [[ "$service_health" == unhealthy || "$service_health" == none ]]; then
+              echo "Managed MES container did not recover a valid health check: $service_health" >&2
+              exit 1
+            fi
+            sleep 2
+          done
+          [[ "$service_health" == healthy ]]
           curl --fail --silent --show-error --retry 15 --retry-connrefused --retry-delay 2 http://127.0.0.1:18095/api/health | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["success"] is True and d["data"]["status"] == "ready", d'
           sudo bash infra/linux/provision-mes-rootless-host.sh --check
           sudo env XDG_CONFIG_HOME=/root/mes-ci-inherited-config DOCKER_CONFIG=/root/mes-ci-inherited-docker bash infra/linux/provision-mes-rootless-host.sh --apply

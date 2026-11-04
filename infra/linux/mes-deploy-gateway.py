@@ -195,7 +195,7 @@ def check_status():
             capture_output=True, text=True,
         ).stdout.strip()
         if service != "mes-station" or health != "healthy" or state != "running" or published != f"127.0.0.1:{PORT}":
-            raise GatewayError("MES service identity or health check failed")
+            raise GatewayError(f"MES service identity or health check failed: service={service!r}, health={health!r}, state={state!r}, published={published!r}")
         image = runtime(
             "/usr/bin/docker", "inspect", "--format", "{{.Config.Image}}", container,
             capture_output=True, text=True,
