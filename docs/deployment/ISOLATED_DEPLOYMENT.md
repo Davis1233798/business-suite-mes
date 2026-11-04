@@ -18,7 +18,7 @@ Profolio PR17 的 MES Caddy route 連到 rootful Docker network `business-suite-
 
 1. `main` push 的 CI 驗證成功後，將該 commit 的 source archive 與 SHA-256 作為短期 artifact。部署 job 僅在 `MES_DEPLOY_ENABLED=true` 時進入 `mes-production` GitHub Environment；需在 GitHub 外部配置專用部署帳號與專屬 SSH secrets。工作流程以預先核對的 known-host key、`StrictHostKeyChecking=yes` 將 archive 以 SSH stdin 傳給固定 forced command；不使用 SCP/SFTP、不上傳或遠端執行 CI 提供的 shell script。請求只包含完整 Git SHA 與 archive SHA-256。部署器拒絕不符合格式的輸入及校驗失敗的 archive。未設定啟用變數或 secrets 時不部署。
 2. 部署器在 `/srv/business-suite-mes` 下建立唯一本次 release 目錄，將 archive 解壓至其中。`Dockerfile.station` 的 Node build stage 從 archive 中的 `package-lock.json` 與前端來源安裝鎖定依賴並執行 `npm run web:build`。前端輸入包含 `web/`、`public/`、`app/globals.css` 所引用的 `app/suite.css`、`app/expressive.css`，以及 `vendor/shadcn-tailwind-4.13.0.css`；Docker build context 必須保留這些相對路徑。Go build stage 編譯 backend。此 archive 不依賴本機/CI 的 `web-dist` 或 `node_modules`。
-3. 以 `business-suite-mes` Compose project 單獨啟動 `mes-station`；資料 volume 固定為 `business-suite-mes-station-data`。部署器檢查 project 中所有 container，若出現非 MES service 或多個 MES service 即拒絕操作。正式 root 必須由維運預先建立並放置 owner marker；部署器不會自行認領既有目錄。舊服務映像以 digest/tag 保留；部署前記錄舊 release。
+3. 以 `business-suite-mes` Compose project 單獨啟動 `mes-station`；資料 volume 固定為 `business-suite-mes-station-data`。部署器檢查 project 中所有 container，若出現非 MES service 或多個 MES service 即拒絕操作。Provisioner 建立正式 root `/srv/business-suite-mes`，並放置 root-owned、mode `0444` 的 `.mes-deploy-owner` marker；marker 內容必須恰為 `business-suite-mes/v1`。部署器會驗證此既有 marker，不會自行認領或改寫目錄。舊服務映像以 digest/tag 保留；部署前記錄舊 release。
 4. 僅以 `http://127.0.0.1:<MES_DEPLOY_PORT>/api/health` 驗證。連續健康檢查成功後才更新 `/srv/business-suite-mes/current` symlink。
 5. 建置、啟動或健康檢查失敗時，僅用 MES 專案回復先前映像/設定並重新等待 health。資料 volume 不刪除、不回復舊快照；資料 schema migration 若不可逆，不在本範本支援範圍，必須另備升級與恢復設計。
 
