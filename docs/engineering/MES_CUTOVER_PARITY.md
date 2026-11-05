@@ -23,7 +23,9 @@
   memberships, MES audit events, station accounts/MES grants, MES business
   tables, and verified MES report idempotency keys. It omits sessions and
   unrelated domains, rebuilds projection state, and refuses populated
-  MES/ERP mapping tables, unsupported tables/markers, or unresolved references.
+  MES/ERP mapping tables, unknown MES-prefixed tables, unsupported migration
+  markers or column layouts, or unresolved references. Unrelated domain tables
+  are excluded rather than copied into the target.
 
 These are source-code and schema capabilities. They do not prove that a
 production migration or service/database cutover has taken place.
