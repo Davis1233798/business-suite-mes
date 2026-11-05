@@ -78,9 +78,13 @@ No local tests are run during this change.
 Passing CI will establish only the synthetic path. It will not certify actual
 source data, a complete application workflow, production downtime, deployment,
 or rollback after MES has accepted new writes. The MES Go server currently has
-the imported finished-goods schema but its independent repository has not yet
-ported the profolio finished-goods HTTP handlers/UI; data is preserved but that
-workflow is not yet usable through the target app. MES Go and Vinext SQLite
-remain separate files; D1 export/import and cross-system ERP integration
-migration are outside this procedure. Before production, review exact source inventory,
-selected organizations, outbox reconciliation, backups, and rollback ownership.
+the imported finished-goods schema, and the independent MES repository now also
+contains the finished-goods HTTP handler (`backend/mes_finished_goods.go`) and
+React screen (`web/src/MesFinishedGoods.tsx`), with the route wired into
+`web/src/main.tsx`. The handler/UI port makes the workflow available in the MES
+Go application; it does not establish that production data has been imported
+or that a live cutover occurred. MES Go and Vinext SQLite remain separate
+systems. D1 export/import, SQLCipher conversion, Vinext data/schema conversion,
+and cross-system ERP integration migration are outside this procedure. Before
+production, review exact source inventory, selected organizations, outbox
+reconciliation, backups, and rollback ownership.
