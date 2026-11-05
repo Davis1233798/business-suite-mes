@@ -2,6 +2,13 @@ export type Language = 'en' | 'zh-TW';
 export function currentLanguage():Language { return localStorage.getItem('suite-language')==='zh-TW'?'zh-TW':'en'; }
 export function initializeLanguage() { document.documentElement.lang=currentLanguage(); }
 const traditionalChinese:Record<string,string> = {
+  "Table pagination": "表格分頁",
+  "First page": "第一頁",
+  "Previous page": "上一頁",
+  "Next page": "下一頁",
+  "Last page": "最後一頁",
+  "Page": "頁",
+  "of": "／",
   "Switch system": "切換系統",
   "Choose a workspace": "選擇工作區",
   "No records yet": "尚無資料",
