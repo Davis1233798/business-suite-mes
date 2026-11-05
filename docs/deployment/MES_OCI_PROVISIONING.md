@@ -6,6 +6,8 @@
 
 Provisioner 只透過 Ubuntu 套件安裝 `acl`, `apparmor`, `dbus-user-session`, `rootlesskit`, `slirp4netns`, `uidmap`。首次 `--check` 以既有 apt package index 執行模擬，不更新 index；`--apply` 才執行 `apt-get update` 並安裝這些套件。預檢分別確認 `/var/lib`（`mes-runtime` rootless Docker data）及 `/srv`（MES releases）所在檔案系統各有至少 8 GiB 可用空間；rootful Docker 的 data filesystem 可能不同，因此不以它代替這兩項檢查。
 
+AppArmor 驗收會完整讀取 `aa-status` 輸出後再尋找 `rootlesskit`。不要在保留 `pipefail` 的管線中用會提早結束讀取的 `grep -q`：正式主機的 profile/process 清單可能很大，提早關閉管線會讓 `aa-status` 收到 SIGPIPE，將已載入的 profile 誤判為缺失。CI 回歸案例先輸出匹配項，再輸出超過 1 MiB 的其餘資料；另驗證缺少匹配項及 `aa-status` 錯誤時仍會拒絕。此讀取方式不改變 AppArmor policy 或 profile mode。
+
 ## 權限邊界
 
 - `mes-runtime` 與 `mes-deploy` 是不同的 system account、私有 home 與 primary group。`mes-runtime` 無 sudo、無 `docker` 群組、無 rootful socket 權限；user daemon 以 linger 在開機後運行。其 Docker API 僅由 runtime UID 的 `/run/user/<uid>/docker.sock` 提供。

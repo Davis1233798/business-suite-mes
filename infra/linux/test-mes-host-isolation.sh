@@ -1,6 +1,10 @@
 #!/usr/bin/env bash
 set -Eeuo pipefail
 
+SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+# shellcheck source=infra/linux/mes-apparmor-status.sh
+source "$SCRIPT_DIR/mes-apparmor-status.sh"
+
 fail() { printf 'FAIL: %s\n' "$1" >&2; exit 1; }
 [[ ${EUID:-$(id -u)} -eq 0 ]] || fail 'run as root on the target OCI host'
 if [[ -e /srv/business-suite ]]; then
@@ -53,7 +57,7 @@ root=/srv/business-suite-mes
 [[ -f "$root/.mes-deploy-owner" && ! -L "$root/.mes-deploy-owner" && $(stat -c '%U:%a' "$root/.mes-deploy-owner") == root:444 && $(cat "$root/.mes-deploy-owner") == business-suite-mes/v1 ]] || fail 'MES owner marker is missing or invalid'
 [[ -f /etc/mes-oci-provisioner/owner && ! -L /etc/mes-oci-provisioner/owner && $(stat -c '%U:%a' /etc/mes-oci-provisioner/owner) == root:444 && $(cat /etc/mes-oci-provisioner/owner) == business-suite-mes/host-provisioner/v1 ]] || fail 'root-owned host provisioner marker is missing or invalid'
 [[ -f /etc/apparmor.d/rootlesskit && ! -L /etc/apparmor.d/rootlesskit ]] || fail 'Ubuntu rootlesskit AppArmor profile is missing'
-aa-status | grep -Fq rootlesskit || fail 'rootlesskit AppArmor profile is not loaded'
+mes_rootlesskit_profile_loaded || fail 'rootlesskit AppArmor profile is not loaded'
 
 runtime_uid=$(id -u mes-runtime)
 runtime_dir="/run/user/$runtime_uid"
