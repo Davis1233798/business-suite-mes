@@ -10,7 +10,10 @@ readonly MES_ROOT='/srv/business-suite-mes'
 readonly MES_MARKER="$MES_ROOT/.mes-deploy-owner"
 readonly SHARED_ROOT='/srv/business-suite'
 readonly VENDOR_REL='infra/linux/rootless-vendor'
-readonly REPO_ROOT="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")/../.." && pwd -P)"
+readonly SCRIPT_DIR="$(cd -- "$(dirname -- "${BASH_SOURCE[0]}")" && pwd -P)"
+# shellcheck source=infra/linux/mes-apparmor-status.sh
+source "$SCRIPT_DIR/mes-apparmor-status.sh"
+readonly REPO_ROOT="$(cd -- "$SCRIPT_DIR/../.." && pwd -P)"
 readonly VENDOR="$REPO_ROOT/$VENDOR_REL"
 readonly ROOTLESS_BIN='/usr/local/libexec/mes-rootless'
 readonly GATEWAY='/usr/local/sbin/mes-deploy-gateway'
@@ -199,7 +202,7 @@ if (( managed_state )); then
   loginctl show-user "$RUNTIME" --property=Linger --value | grep -qx yes || fail 'mes-runtime user linger is not enabled'
   aa-status --enabled || fail 'AppArmor is disabled'
   [[ -f /etc/apparmor.d/rootlesskit ]] || fail 'Ubuntu rootlesskit AppArmor profile is missing'
-  aa-status | grep -Fq rootlesskit || fail 'Ubuntu rootlesskit AppArmor profile is not loaded'
+  mes_rootlesskit_profile_loaded || fail 'Ubuntu rootlesskit AppArmor profile is not loaded'
   runtime_uid=$(id -u "$RUNTIME")
   [[ -S "/run/user/$runtime_uid/docker.sock" && $(stat -c '%U:%a' "/run/user/$runtime_uid/docker.sock") == "$RUNTIME:600" ]] || fail 'managed rootless Docker socket is unavailable or unsafe'
   rootless_security=$(runuser -u "$RUNTIME" -- env -i HOME=/var/lib/mes-runtime XDG_RUNTIME_DIR="/run/user/$runtime_uid" DOCKER_HOST="unix:///run/user/$runtime_uid/docker.sock" docker info --format '{{json .SecurityOptions}}' 2>/dev/null) || fail 'managed rootless Docker daemon is unavailable'
@@ -305,7 +308,7 @@ runtime_uid=$(id -u "$RUNTIME")
 aa-status --enabled || fail 'AppArmor became disabled'
 [[ -f /etc/apparmor.d/rootlesskit && ! -L /etc/apparmor.d/rootlesskit ]] || fail 'Ubuntu rootlesskit AppArmor profile is unavailable'
 apparmor_parser -r /etc/apparmor.d/rootlesskit
-aa-status | grep -Fq rootlesskit || fail 'Ubuntu rootlesskit AppArmor profile is not loaded'
+mes_rootlesskit_profile_loaded || fail 'Ubuntu rootlesskit AppArmor profile is not loaded'
 loginctl enable-linger "$RUNTIME"
 for attempt in $(seq 1 20); do [[ -S "/run/user/$runtime_uid/bus" ]] && break; sleep 1; done
 [[ -S "/run/user/$runtime_uid/bus" ]] || fail 'runtime user systemd bus did not appear after enabling linger'
