@@ -79,15 +79,6 @@ jobs:
           done
           curl --fail --silent http://127.0.0.1:18095/api/health > /dev/null
           npx playwright test --config playwright.lifecycle.config.ts
-      - uses: actions/upload-artifact@v4
-        if: always()
-        with:
-          name: mes-print-preview-browser-${{ github.run_id }}-${{ github.run_attempt }}
-          path: |
-            playwright-report/
-            test-results/
-          if-no-files-found: ignore
-          retention-days: 7
       - name: Verify isolated deployment and rollback
         run: bash infra/linux/test-mes-deployment.sh
       - name: Verify gateway archive handling
