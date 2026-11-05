@@ -71,9 +71,183 @@ jobs:
         run: python3 infra/linux/test-mes-gateway.py
       - name: Verify deployment workflow boundary contract
         run: python3 infra/linux/test-mes-workflow-contract.py
+      - name: Verify OCI rootless provisioner boundary contract
+        run: python3 infra/linux/test-mes-provisioner-contract.py
+
+  rootless-host-provisioning:
+    runs-on: ubuntu-24.04-arm
+    timeout-minutes: 60
+    permissions:
+      contents: read
+    steps:
+      - uses: actions/checkout@v4
+      - name: Validate provisioning shell syntax before host setup
+        run: bash -n infra/linux/provision-mes-rootless-host.sh
+      - name: Replace Docker only inside disposable ARM64 runner
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          # DISPOSABLE ARM64 runner only: hosted runners ship Docker 28; replace it only in this VM.
+          runner_docker_packages=()
+          for package in docker-ce docker-ce-cli docker-ce-rootless-extras containerd.io docker-buildx-plugin docker-compose-plugin docker.io docker.io-app docker-compose-v2; do
+            if dpkg-query -W -f='${db:Status-Status}' "$package" 2>/dev/null | grep -qx installed; then
+              runner_docker_packages+=("$package")
+            fi
+          done
+          if ((${#runner_docker_packages[@]})); then
+            sudo systemctl stop docker.service docker.socket 2>/dev/null || true
+            sudo apt-get remove -y --purge "${runner_docker_packages[@]}"
+          fi
+          sudo apt-get install -y --no-install-recommends docker.io=29.1.3-0ubuntu3~24.04.2 docker-compose-v2
+          sudo systemctl enable --now docker.service
+          test "$(dpkg-query -W -f='${Version}' docker.io)" = '29.1.3-0ubuntu3~24.04.2'
+          test "$(docker info --format '{{.ServerVersion}}')" = '29.1.3'
+          docker compose version --short
+      - name: Prepare SSH parser for the forced-command acceptance check
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y openssh-server
+          # Package installation does not start sshd on the disposable runner.
+          [[ ! -L /run/sshd ]]
+          sudo install -d -o root -g root -m 0755 /run/sshd
+          sudo /usr/sbin/sshd -t
+      - name: Provision rootless MES beside an unchanged rootful Docker sentinel
+        shell: bash
+        run: |
+          set -Eeuo pipefail
+          sudo apt-get update
+          engine_version="$(docker info --format '{{.ServerVersion}}')"
+          [[ "$engine_version" == 29.* ]] || { echo "Expected existing rootful Docker 29.x, got $engine_version" >&2; exit 1; }
+          rootful_ids="$(docker ps -aq)"
+          sentinel="mes-provisioner-rootful-sentinel-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          volume="mes-provisioner-rootful-volume-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          source_dir="/tmp/mes-provisioning-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}"
+          port_probe_log="/tmp/mes-provisioning-port-probe-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.log"
+          port_check_log="/tmp/mes-provisioning-port-check-${GITHUB_RUN_ID}-${GITHUB_RUN_ATTEMPT}.log"
+          port_probe_pid=''
+          [[ "$sentinel" =~ ^mes-provisioner-rootful-sentinel-[0-9]+-[0-9]+$ ]]
+          [[ "$volume" =~ ^mes-provisioner-rootful-volume-[0-9]+-[0-9]+$ ]]
+          [[ "$source_dir" =~ ^/tmp/mes-provisioning-[0-9]+-[0-9]+$ ]]
+          ! docker inspect "$sentinel" >/dev/null 2>&1
+          ! docker volume inspect "$volume" >/dev/null 2>&1
+          [[ ! -e /srv/business-suite && ! -L /srv/business-suite ]]
+          cleanup() {
+            local failed_status=$?
+            if (( failed_status != 0 )); then
+              for diagnostic in "$port_check_log" "$port_probe_log"; do
+                if [[ -f "$diagnostic" && ! -L "$diagnostic" ]]; then tail -n 100 -- "$diagnostic" >&2; fi
+              done
+            fi
+            if [[ -n "$port_probe_pid" ]]; then kill "$port_probe_pid" >/dev/null 2>&1 || true; fi
+            docker rm -f "$sentinel" >/dev/null 2>&1 || true
+            docker volume rm "$volume" >/dev/null 2>&1 || true
+            rm -f -- "$port_probe_log" "$port_check_log"
+            if [[ -d "$source_dir" && ! -L "$source_dir" && "$(realpath -e -- "$source_dir")" == "$source_dir" ]]; then
+              sudo -u mes-runtime -- /usr/bin/rm -rf -- "$source_dir"
+            fi
+          }
+          trap cleanup EXIT
+          docker volume create "$volume" >/dev/null
+          docker run --detach --name "$sentinel" --volume "$volume:/data" alpine:3.21 sh -c 'printf preserved >/data/sentinel; exec sleep 3600' >/dev/null
+          sentinel_id="$(docker inspect --format '{{.Id}}' "$sentinel")"
+          echo 'Prove unmanaged port conflicts are rejected'
+          python3 -m http.server 18095 --bind 127.0.0.1 >"$port_probe_log" 2>&1 &
+          port_probe_pid=$!
+          for attempt in $(seq 1 20); do
+            if ss -H -ltn 'sport = :18095' | grep -q .; then break; fi
+            sleep 0.25
+          done
+          ss -H -ltn 'sport = :18095' | grep -q .
+          if sudo bash infra/linux/provision-mes-rootless-host.sh --check >"$port_check_log" 2>&1; then
+            echo 'Unmanaged host accepted an unrelated listener on the MES port' >&2
+            exit 1
+          fi
+          grep -Fq 'TCP port 18095 is already in use on an unmanaged host' "$port_check_log"
+          : > "$port_check_log"
+          kill "$port_probe_pid"
+          wait "$port_probe_pid" 2>/dev/null || true
+          port_probe_pid=''
+          ! ss -H -ltn 'sport = :18095' | grep -q .
+          sudo install -d -m 0755 -o "$(id -un)" -g "$(id -gn)" /srv/business-suite
+          printf 'portfolio sentinel\n' | sudo tee /srv/business-suite/provisioner-ci-sentinel >/dev/null
+          sudo bash infra/linux/provision-mes-rootless-host.sh --check
+          sudo env XDG_CONFIG_HOME=/root/mes-ci-inherited-config DOCKER_CONFIG=/root/mes-ci-inherited-docker bash infra/linux/provision-mes-rootless-host.sh --apply
+          sudo test ! -e /root/mes-ci-inherited-config
+          sudo test ! -e /root/mes-ci-inherited-docker
+          runtime_uid=$(id -u mes-runtime)
+          sudo -u mes-runtime -- env -i -i HOME=/var/lib/mes-runtime PATH=/usr/bin:/bin XDG_RUNTIME_DIR="/run/user/$runtime_uid" DBUS_SESSION_BUS_ADDRESS="unix:path=/run/user/$runtime_uid/bus" /usr/bin/systemctl --user restart docker.service
+          test "$(sudo stat -c '%U:%a' "/run/user/$runtime_uid/docker.sock")" = mes-runtime:600
+          # A second apply must audit and return without disrupting either daemon.
+          sudo env XDG_CONFIG_HOME=/root/mes-ci-inherited-config DOCKER_CONFIG=/root/mes-ci-inherited-docker bash infra/linux/provision-mes-rootless-host.sh --apply
+          sudo bash infra/linux/provision-mes-rootless-host.sh --check
+          sudo bash infra/linux/test-mes-host-isolation.sh
+          # Fetch public committed source without granting access to the runner home.
+          sudo -u mes-runtime -- env -i HOME=/var/lib/mes-runtime PATH=/usr/bin:/bin /usr/bin/git init "$source_dir"
+          sudo -u mes-runtime -- env -i HOME=/var/lib/mes-runtime PATH=/usr/bin:/bin /usr/bin/git -C "$source_dir" remote add origin https://github.com/Davis1233798/business-suite-mes.git
+          sudo -u mes-runtime -- env -i HOME=/var/lib/mes-runtime PATH=/usr/bin:/bin /usr/bin/git -C "$source_dir" fetch --depth=1 origin "$GITHUB_SHA"
+          sudo -u mes-runtime -- env -i HOME=/var/lib/mes-runtime PATH=/usr/bin:/bin /usr/bin/git -C "$source_dir" checkout --detach FETCH_HEAD
+          test "$(sudo -u mes-runtime -- env -i HOME=/var/lib/mes-runtime PATH=/usr/bin:/bin /usr/bin/git -C "$source_dir" rev-parse HEAD)" = "$GITHUB_SHA"
+          runtime_uid="$(id -u mes-runtime)"
+          sudo -u mes-runtime -- env -i \
+            HOME="$(getent passwd mes-runtime | cut -d: -f6)" PATH=/usr/bin:/bin \
+            XDG_RUNTIME_DIR="/run/user/$runtime_uid" \
+            DOCKER_HOST="unix:///run/user/$runtime_uid/docker.sock" \
+            bash -c 'cd "$1" && exec bash infra/linux/test-mes-deployment.sh' _ "$source_dir"
+          echo 'Deploy MES on its owned production port, then audit it'
+          release_archive="/srv/business-suite-mes/staging/$GITHUB_SHA.tgz"
+          sudo -u mes-runtime -- env -i HOME=/var/lib/mes-runtime PATH=/usr/bin:/bin /bin/bash -c 'set -Eeuo pipefail; cd "$1"; git archive --format=tar "$2" | gzip -n > "$3"' _ "$source_dir" "$GITHUB_SHA" "$release_archive"
+          test ! -r "$release_archive"
+          release_digest="$(sudo -u mes-runtime -- /usr/bin/sha256sum "$release_archive" | cut -d' ' -f1)"
+          sudo -u mes-runtime -- env -i \
+            HOME=/var/lib/mes-runtime PATH=/usr/bin:/bin \
+            XDG_RUNTIME_DIR="/run/user/$runtime_uid" \
+            DOCKER_HOST="unix:///run/user/$runtime_uid/docker.sock" \
+            bash -c 'cd "$1"; MES_REQUIRE_ROOTLESS_DOCKER=1 bash infra/linux/deploy-mes-release.sh "$2" "$3" "$4"' _ "$source_dir" "$GITHUB_SHA" "$release_digest" "$release_archive"
+          curl --fail --silent --show-error http://127.0.0.1:18095/api/health | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["success"] is True and d["data"]["status"] == "ready", d'
+          sudo bash infra/linux/provision-mes-rootless-host.sh --check
+          echo 'Prove managed port conflicts are rejected'
+          managed_container="$(sudo -u mes-runtime -- env -i HOME=/var/lib/mes-runtime XDG_RUNTIME_DIR="/run/user/$runtime_uid" DOCKER_HOST="unix:///run/user/$runtime_uid/docker.sock" /usr/bin/docker ps -q --filter label=com.docker.compose.project=business-suite-mes --filter status=running)"
+          [[ "$(wc -w <<<"$managed_container" | tr -d ' ')" == 1 ]]
+          sudo -u mes-runtime -- env -i HOME=/var/lib/mes-runtime XDG_RUNTIME_DIR="/run/user/$runtime_uid" DOCKER_HOST="unix:///run/user/$runtime_uid/docker.sock" /usr/bin/docker stop "$managed_container" >/dev/null
+          python3 -m http.server 18095 --bind 127.0.0.1 >"$port_probe_log" 2>&1 &
+          port_probe_pid=$!
+          for attempt in $(seq 1 20); do
+            if ss -H -ltn 'sport = :18095' | grep -q .; then break; fi
+            sleep 0.25
+          done
+          ss -H -ltn 'sport = :18095' | grep -q .
+          if sudo bash infra/linux/provision-mes-rootless-host.sh --check >"$port_check_log" 2>&1; then
+            echo 'Managed host accepted an unrelated listener on the MES port' >&2
+            exit 1
+          fi
+          grep -Fq 'TCP port 18095 is occupied without exactly one managed MES container' "$port_check_log"
+          : > "$port_check_log"
+          kill "$port_probe_pid"
+          wait "$port_probe_pid" 2>/dev/null || true
+          port_probe_pid=''
+          sudo -u mes-runtime -- env -i HOME=/var/lib/mes-runtime XDG_RUNTIME_DIR="/run/user/$runtime_uid" DOCKER_HOST="unix:///run/user/$runtime_uid/docker.sock" /usr/bin/docker start "$managed_container" >/dev/null
+          echo 'Wait for Docker health after the managed-port negative fixture'
+          for attempt in $(seq 1 45); do
+            service_health="$(sudo -u mes-runtime -- env -i HOME=/var/lib/mes-runtime XDG_RUNTIME_DIR="/run/user/$runtime_uid" DOCKER_HOST="unix:///run/user/$runtime_uid/docker.sock" /usr/bin/docker inspect --format '{{if .State.Health}}{{.State.Health.Status}}{{else}}none{{end}}' "$managed_container")"
+            if [[ "$service_health" == healthy ]]; then break; fi
+            if [[ "$service_health" == unhealthy || "$service_health" == none ]]; then
+              echo "Managed MES container did not recover a valid health check: $service_health" >&2
+              exit 1
+            fi
+            sleep 2
+          done
+          [[ "$service_health" == healthy ]]
+          curl --fail --silent --show-error --retry 15 --retry-connrefused --retry-delay 2 http://127.0.0.1:18095/api/health | python3 -c 'import json,sys; d=json.load(sys.stdin); assert d["success"] is True and d["data"]["status"] == "ready", d'
+          sudo bash infra/linux/provision-mes-rootless-host.sh --check
+          sudo env XDG_CONFIG_HOME=/root/mes-ci-inherited-config DOCKER_CONFIG=/root/mes-ci-inherited-docker bash infra/linux/provision-mes-rootless-host.sh --apply
+          [[ "$(docker info --format '{{.ServerVersion}}')" == "$engine_version" ]]
+          [[ "$(docker ps --filter "name=^/${sentinel}$" --format '{{.ID}}')" == "${sentinel_id:0:12}" ]]
+          docker exec "$sentinel" test "$(docker exec "$sentinel" cat /data/sentinel)" = preserved
+          [[ "$(docker volume inspect --format '{{.Name}}' "$volume")" == "$volume" ]]
 
   release:
-    needs: [mes, windows-desktop]
+    needs: [mes, windows-desktop, rootless-host-provisioning]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main'
     runs-on: ubuntu-latest
     timeout-minutes: 20
@@ -114,7 +288,7 @@ jobs:
           docker push "$image:${GITHUB_SHA}"
 
   deploy:
-    needs: [mes, windows-desktop, release]
+    needs: [mes, windows-desktop, rootless-host-provisioning, release]
     if: github.event_name == 'push' && github.ref == 'refs/heads/main' && vars.MES_DEPLOY_ENABLED == 'true'
     runs-on: ubuntu-latest
     timeout-minutes: 20

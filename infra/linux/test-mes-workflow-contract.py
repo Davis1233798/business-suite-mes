@@ -68,8 +68,8 @@ windows_steps = ["node --test tests/desktop-identity.test.cjs", "npm run desktop
 windows_positions = [windows_desktop.find(step) for step in windows_steps]
 if any(position < 0 for position in windows_positions) or windows_positions != sorted(windows_positions):
     raise SystemExit("Windows identity checks and packaging must pass before uploading its desktop artifact")
-if "needs: [mes, windows-desktop]" not in release:
-    raise SystemExit("Release artifacts and image publication must wait for MES and Windows desktop validation")
+if "needs: [mes, windows-desktop, rootless-host-provisioning]" not in release:
+    raise SystemExit("Release artifacts and image publication must wait for MES, Windows, and rootless host validation")
 if "if: github.event_name == 'push' && github.ref == 'refs/heads/main'" not in release:
     raise SystemExit("Release artifacts and image publication must be main-push only")
 if "Package exact main source for deployment" not in release or "actions/upload-artifact@v4" not in release:
@@ -80,8 +80,8 @@ if "if: always()" in release or "if: always()" in windows_desktop:
     raise SystemExit("Release and Windows build artifacts must not be uploaded after failed dependencies or steps")
 if "actions/upload-artifact@v4" in mes:
     raise SystemExit("Deployable source artifacts must not be uploaded by the ungated MES validation job")
-if "needs: [mes, windows-desktop, release]" not in deploy:
-    raise SystemExit("Deployment must depend on MES, Windows desktop, and the gated release artifact")
+if "needs: [mes, windows-desktop, rootless-host-provisioning, release]" not in deploy:
+    raise SystemExit("Deployment must depend on MES, Windows, rootless host, and gated release validation")
 
 for forbidden in ("OCI_DEPLOY_KEY", "/srv/business-suite/current", "business-suite-station-data", "ssh-keyscan", "scp ", "remote_script", "bash '$remote_script'"):
     if forbidden in deploy:
