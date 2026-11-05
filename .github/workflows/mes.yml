@@ -97,6 +97,8 @@ jobs:
       - uses: actions/checkout@v4
       - name: Validate provisioning shell syntax before host setup
         run: bash -n infra/linux/provision-mes-rootless-host.sh
+      - name: Verify AppArmor status reader drains full output
+        run: bash infra/linux/test-mes-apparmor-status.sh
       - name: Replace Docker only inside disposable ARM64 runner
         shell: bash
         run: |
