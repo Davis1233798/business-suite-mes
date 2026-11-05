@@ -65,6 +65,20 @@ jobs:
           done
           curl --fail --silent http://127.0.0.1:18095/api/health | python3 -c 'import json,os,sys; d=json.load(sys.stdin); assert d["data"]["revision"] == os.environ["GITHUB_SHA"], d'
           test "$(curl --silent -o /dev/null -w '%{http_code}' http://127.0.0.1:18095/erp/login)" = 404
+      - name: Install Chromium for print preview lifecycle acceptance
+        run: npx playwright install --with-deps chromium
+      - name: Verify print preview request cancellation in the MES image
+        shell: bash
+        run: |
+          set -euo pipefail
+          docker run -d --name mes-browser -p 127.0.0.1:18095:8095 mes-ci:${GITHUB_SHA}
+          trap 'docker logs mes-browser; docker rm -f mes-browser' EXIT
+          for attempt in $(seq 1 30); do
+            if curl --fail --silent http://127.0.0.1:18095/api/health > /dev/null; then break; fi
+            sleep 2
+          done
+          curl --fail --silent http://127.0.0.1:18095/api/health > /dev/null
+          npx playwright test --config playwright.lifecycle.config.ts
       - name: Verify isolated deployment and rollback
         run: bash infra/linux/test-mes-deployment.sh
       - name: Verify gateway archive handling
