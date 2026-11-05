@@ -17,6 +17,20 @@ gateway = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(gateway)
 
 class GatewayArchiveTests(unittest.TestCase):
+    def test_health_requires_running_image_revision(self):
+        revision = 'a' * 40
+        valid = {'success': True, 'data': {'backend': 'go', 'status': 'ready', 'revision': revision, 'uptime': 10}}
+        self.assertEqual(gateway.validate_service_health(valid, 'business-suite-mes-station:' + revision), revision)
+        invalid = [None, [], {'success': True}, {'success': 'true', 'data': valid['data']}]
+        for data in ({'backend': 'go', 'status': 'ready'}, {**valid['data'], 'revision': 'b' * 40}, {**valid['data'], 'status': 'starting'}, {**valid['data'], 'backend': 'other'}):
+            invalid.append({'success': True, 'data': data})
+        for response in invalid:
+            with self.subTest(response=response), self.assertRaises(gateway.GatewayError):
+                gateway.validate_service_health(response, 'business-suite-mes-station:' + revision)
+        for image in ('business-suite-mes-station:latest', 'other:' + revision, 'business-suite-mes-station:' + 'b' * 40):
+            with self.subTest(image=image), self.assertRaises(gateway.GatewayError):
+                gateway.validate_service_health(valid, image)
+
     def archive(self, entries):
         directory = tempfile.TemporaryDirectory()
         self.addCleanup(directory.cleanup)
