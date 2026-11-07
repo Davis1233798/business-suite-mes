@@ -31,3 +31,8 @@ explicit account mapping, mismatched cached data, and a conflicting native
 retry key. Exercise the migrated fingerprint and response through the Go
 report route before the migration can be used with a production source.
 The observed source currently has no enrolled MES station accounts.
+
+Use `--reviewed-report-mapping MAPPINGS.json` for an offline import after
+account enrollment has been verified. The file contains an array of objects
+with `organizationId`, `legacyOperatorId`, and `stationUserId`. The importer
+requires the last two fields to match and counts converted rows in its result.

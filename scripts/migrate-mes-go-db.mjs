@@ -4,6 +4,7 @@ import path from 'node:path';
 import { createHash, randomBytes } from 'node:crypto';
 import { DatabaseSync } from 'node:sqlite';
 import { fileURLToPath, pathToFileURL } from 'node:url';
+import { convertLegacyReportRetries } from './mes-legacy-report-replay.mjs';
 
 export const MES_TABLES = [
   'mes_products', 'mes_bom_versions', 'mes_bom_items', 'mes_work_centers',
@@ -234,7 +235,7 @@ function applyTargetSchema(target) {
   // after importing rows, so no source delivery state is replayed.
 }
 
-export function migrate(sourcePath, destinationPath, organizationIds, { afterSnapshot, outboxReconciliation } = {}) {
+export function migrate(sourcePath, destinationPath, organizationIds, { afterSnapshot, outboxReconciliation, legacyReportMappings } = {}) {
   if (!Array.isArray(organizationIds) || organizationIds.length === 0 || organizationIds.some(id => typeof id !== 'string' || !id)) {
     throw new Error('Specify one or more exact --organization IDs; wildcard migration is disabled');
   }
@@ -275,11 +276,7 @@ export function migrate(sourcePath, destinationPath, organizationIds, { afterSna
     for (const row of backup.prepare(`SELECT DISTINCT a.organization_id FROM station_grants g JOIN station_accounts a ON a.user_id=g.user_id WHERE g.site='mes' AND a.organization_id IN (${marks})`).all(...selectedOrgIds)) businessOrgIds.add(row.organization_id);
     const noMes = selectedOrgIds.filter(id => !businessOrgIds.has(id));
     if (noMes.length) throw new Error(`Selected tenant has no MES business data or MES identity grant: ${noMes.join(', ')}`);
-    const unmappedRetry = backup.prepare(`
-      SELECT 1 FROM idempotency_keys
-      WHERE organization_id IN (${marks}) AND endpoint='/api/mes/report' LIMIT 1
-    `).get(...selectedOrgIds);
-    if (unmappedRetry) throw new Error('Source MES report retry requires reviewed identity and response mapping');
+    const convertedRetries = convertLegacyReportRetries(backup, selectedOrgIds, legacyReportMappings);
     const mappedOrgs = new Set(backup.prepare(`
       SELECT DISTINCT a.organization_id FROM station_accounts a
       JOIN station_grants g ON a.user_id=g.user_id AND g.site='mes'
@@ -327,6 +324,14 @@ export function migrate(sourcePath, destinationPath, organizationIds, { afterSna
       if (response?.reportId !== report.id) throw new Error(`MES retry response does not match report ${report.id}`);
     }
     copied.idempotency_keys = copyRows(backup, target, 'idempotency_keys', `organization_id IN (${marks}) AND endpoint='/station/mes/report'`, selectedOrgIds);
+    if (convertedRetries.length) {
+      const insertRetry = target.prepare(`INSERT INTO idempotency_keys
+        (id,organization_id,key,endpoint,request_hash,response_status,response_body) VALUES(?,?,?,?,?,200,?)`);
+      for (const retry of convertedRetries) {
+        insertRetry.run(retry.id, retry.organizationId, retry.key, retry.endpoint, retry.fingerprint, retry.response);
+      }
+      copied.idempotency_keys += convertedRetries.length;
+    }
     // Keep the MES mark, account hashes, and verified MES retry state; never
     // copy live sessions, lockouts, unrelated grants, or non-MES keys.
     target.exec('PRAGMA foreign_keys=ON');
@@ -360,7 +365,7 @@ export function migrate(sourcePath, destinationPath, organizationIds, { afterSna
     requireUnchangedSource();
     // Atomic no-clobber publication. linkSync fails if destination already exists.
     fs.linkSync(stagingPath, destinationFile);
-    return { source: sourceFile, destination: destinationFile, organizationIds: selectedOrgIds, sourceSnapshotContentSha256: before, copiedRows: copied, targetRows: targetCounts, resetTables: RESET_TABLES, rebuiltTables: REBUILT_TABLES, sessionsCopied: false, outboxReconciliation: retainedArchive };
+    return { source: sourceFile, destination: destinationFile, organizationIds: selectedOrgIds, sourceSnapshotContentSha256: before, copiedRows: copied, targetRows: targetCounts, resetTables: RESET_TABLES, rebuiltTables: REBUILT_TABLES, sessionsCopied: false, outboxReconciliation: retainedArchive, convertedLegacyReportRetries: convertedRetries.length };
   } finally {
     target?.close(); backup?.close(); source?.close();
     fs.rmSync(privateDir, { recursive: true, force: true });
@@ -369,18 +374,26 @@ export function migrate(sourcePath, destinationPath, organizationIds, { afterSna
 
 function cli(args) {
   if (args.length < 4 || args[0] !== '--source' || args[2] !== '--destination') {
-    throw new Error('Usage: node scripts/migrate-mes-go-db.mjs --source OLD.sqlite --destination NEW.sqlite --organization ORG_ID [--organization ORG_ID ...] [--reviewed-outbox-archive ARCHIVE.sqlite]');
+    throw new Error('Usage: node scripts/migrate-mes-go-db.mjs --source OLD.sqlite --destination NEW.sqlite --organization ORG_ID [--organization ORG_ID ...] [--reviewed-outbox-archive ARCHIVE.sqlite] [--reviewed-report-mapping MAPPINGS.json]');
   }
   const source = args[1], destination = args[3];
   const organizations = [];
   let outboxReconciliation;
+  let legacyReportMappings;
   for (let i = 4; i < args.length; i++) {
     if (args[i] === '--organization' && args[i + 1]) organizations.push(args[++i]);
     else if (args[i] === '--reviewed-outbox-archive' && args[i + 1] && !outboxReconciliation) {
       outboxReconciliation = { reviewed: true, archivePath: args[++i] };
+    } else if (args[i] === '--reviewed-report-mapping' && args[i + 1] && legacyReportMappings === undefined) {
+      try {
+        legacyReportMappings = JSON.parse(fs.readFileSync(args[++i], 'utf8'));
+      } catch {
+        throw new Error('Cannot read the reviewed MES report mapping');
+      }
+      if (!Array.isArray(legacyReportMappings)) throw new Error('Reviewed MES report mapping must be a JSON array');
     } else throw new Error(`Unexpected argument: ${args[i]}`);
   }
-  return migrate(source, destination, organizations, { outboxReconciliation });
+  return migrate(source, destination, organizations, { outboxReconciliation, legacyReportMappings });
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {

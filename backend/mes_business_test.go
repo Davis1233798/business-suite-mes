@@ -29,9 +29,13 @@ func TestMESImportedRetryReplay(t *testing.T) {
 	identity := &Identity{UserID: "user-a", OrganizationID: "tenant-a"}
 	grant := &Grant{Site: "mes", Role: "operator", Scope: "front", Enabled: true}
 	path := "/api/stations/mes/business"
-	input := map[string]any{"action": "report", "workOrderId": "wo-a", "operationId": "op-a", "goodQuantity": 4, "scrapQuantity": 0, "idempotencyKey": "report-retry-001"}
+	key, notes := "report-retry-001", ""
+	if os.Getenv("MES_IMPORTED_RETRY_LEGACY") == "1" {
+		key, notes = "source-report-retry-001", "校驗 <&>"
+	}
+	input := map[string]any{"action": "report", "workOrderId": "wo-a", "operationId": "op-a", "goodQuantity": 4, "scrapQuantity": 0, "notes": notes, "idempotencyKey": key}
 	var before int
-	if err = db.QueryRow("SELECT count(*) FROM mes_production_reports WHERE idempotency_key=?", "report-retry-001").Scan(&before); err != nil {
+	if err = db.QueryRow("SELECT count(*) FROM mes_production_reports WHERE idempotency_key=?", key).Scan(&before); err != nil {
 		t.Fatal(err)
 	}
 	w := httptest.NewRecorder()
@@ -50,6 +54,16 @@ func TestMESImportedRetryReplay(t *testing.T) {
 	if payload.Data["reportId"] != "report-a" {
 		t.Fatalf("replay returned wrong report: %v", payload.Data)
 	}
+	if payload.Data["totalCompleted"] != float64(4) || payload.Data["status"] != "in_progress" {
+		t.Fatalf("replay returned wrong historical status and totals: %v", payload.Data)
+	}
+	w = httptest.NewRecorder()
+	r = httptest.NewRequest(http.MethodPost, path, mustJSONReader(t, input))
+	r.Header.Set("Content-Type", "application/json")
+	a.mesBusiness(w, r, &Identity{UserID: "other-writer", OrganizationID: "tenant-a"}, grant)
+	if w.Code != http.StatusConflict {
+		t.Fatalf("changed-actor replay status=%d body=%s", w.Code, w.Body.String())
+	}
 	input["goodQuantity"] = 3
 	w = httptest.NewRecorder()
 	r = httptest.NewRequest(http.MethodPost, path, mustJSONReader(t, input))
@@ -59,7 +73,7 @@ func TestMESImportedRetryReplay(t *testing.T) {
 		t.Fatalf("changed-payload replay status=%d body=%s", w.Code, w.Body.String())
 	}
 	var after int
-	if err = db.QueryRow("SELECT count(*) FROM mes_production_reports WHERE idempotency_key=?", "report-retry-001").Scan(&after); err != nil {
+	if err = db.QueryRow("SELECT count(*) FROM mes_production_reports WHERE idempotency_key=?", key).Scan(&after); err != nil {
 		t.Fatal(err)
 	}
 	if after != before {
