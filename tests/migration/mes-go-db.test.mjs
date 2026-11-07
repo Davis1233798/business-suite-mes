@@ -17,17 +17,22 @@ function temporary(t) {
   return dir;
 }
 
-function makeSharedSource(file, { badReporter = false, pendingOutbox = false, processedOutbox = false, extraMesTable = false, extraVersion = false, populatedErpMapping = false, tenantBMesGrant = false, retryKey = false, legacyDispositionSchema = false, wal = false } = {}) {
+function makeSharedSource(file, { badReporter = false, pendingOutbox = false, processedOutbox = false, nonProcessedOutboxStatus = '', extraMesTable = false, extraVersion = false, populatedErpMapping = false, tenantBMesGrant = false, retryKey = false, actualMesRetryKey = false, legacyDispositionSchema = false, wal = false, sourceVariant = 'complete', partialFinishedGoods = false, emptyMesIdentity = false, mesStartAudit = false } = {}) {
   const db = new DatabaseSync(file);
   // Match the shared Portfolio Go database bootstrap, including its actual
   // common multi-station schema and migration ledger rather than the standalone
   // MES repository's reduced `mes_initial.sql` source.
-  for (const name of ['0000_spicy_bromley.sql', '0001_transaction_guards.sql', '0002_dining_takeout.sql', '0003_mes_projection.sql', '0004_station_identity.sql', '0005_traffic_lab.sql', '0006_mes_finished_goods.sql', '0007_mes_finished_goods_resolutions.sql']) {
+  const sourceMigrations = ['0000_spicy_bromley.sql', '0001_transaction_guards.sql', '0002_dining_takeout.sql', '0003_mes_projection.sql', '0004_station_identity.sql', '0005_traffic_lab.sql'];
+  if (sourceVariant !== 'projection-only') sourceMigrations.push('0006_mes_finished_goods.sql', '0007_mes_finished_goods_resolutions.sql');
+  for (const name of sourceMigrations) {
     db.exec(fs.readFileSync(path.join(migrations, name), 'utf8'));
   }
-  for (const name of ['0008_mes_erp_mapping.sql', '0009_erp_mes_receipts.sql']) {
-    db.exec(fs.readFileSync(path.join(root, 'tests', 'migration', 'fixtures', name), 'utf8'));
+  if (sourceVariant !== 'projection-only') {
+    for (const name of ['0008_mes_erp_mapping.sql', '0009_erp_mes_receipts.sql']) {
+      db.exec(fs.readFileSync(path.join(root, 'tests', 'migration', 'fixtures', name), 'utf8'));
+    }
   }
+  if (partialFinishedGoods) db.exec('DROP TABLE mes_finished_goods_resolutions;');
   if (legacyDispositionSchema) db.exec(`DROP TABLE mes_finished_goods_quality_dispositions;
     CREATE TABLE mes_finished_goods_quality_dispositions (
       id TEXT PRIMARY KEY NOT NULL, organization_id TEXT NOT NULL, batch_id TEXT NOT NULL,
@@ -42,12 +47,14 @@ function makeSharedSource(file, { badReporter = false, pendingOutbox = false, pr
   db.prepare('INSERT INTO users(id,email,display_name) VALUES(?,?,?)').run('user-b', 'b@example.test', 'User B');
   db.prepare('INSERT INTO memberships(id,organization_id,user_id) VALUES(?,?,?)').run('member-a', 'tenant-a', 'user-a');
   db.prepare('INSERT INTO memberships(id,organization_id,user_id) VALUES(?,?,?)').run('member-b', 'tenant-b', 'user-b');
-  db.prepare('INSERT INTO station_accounts(user_id,organization_id,email,password_hash) VALUES(?,?,?,?)').run('user-a', 'tenant-a', 'a@example.test', 'pbkdf2-sha256$test$hash');
-  if (tenantBMesGrant) db.prepare('INSERT INTO station_accounts(user_id,organization_id,email,password_hash) VALUES(?,?,?,?)').run('user-b', 'tenant-b', 'b@example.test', 'pbkdf2-sha256$test$hash-b');
-  db.prepare('INSERT INTO station_grants(user_id,site,role,scope) VALUES(?,?,?,?)').run('user-a', 'mes', 'admin', 'back');
-  if (tenantBMesGrant) db.prepare('INSERT INTO station_grants(user_id,site,role,scope) VALUES(?,?,?,?)').run('user-b', 'mes', 'admin', 'back');
-  db.prepare('INSERT INTO station_grants(user_id,site,role,scope) VALUES(?,?,?,?)').run('user-a', 'erp', 'admin', 'back');
-  db.prepare('INSERT INTO station_sessions(token_hash,user_id,expires_at) VALUES(?,?,?)').run('secret-session-hash', 'user-a', 9999999999999);
+  if (!emptyMesIdentity) {
+    db.prepare('INSERT INTO station_accounts(user_id,organization_id,email,password_hash) VALUES(?,?,?,?)').run('user-a', 'tenant-a', 'a@example.test', 'pbkdf2-sha256$test$hash');
+    if (tenantBMesGrant) db.prepare('INSERT INTO station_accounts(user_id,organization_id,email,password_hash) VALUES(?,?,?,?)').run('user-b', 'tenant-b', 'b@example.test', 'pbkdf2-sha256$test$hash-b');
+    db.prepare('INSERT INTO station_grants(user_id,site,role,scope) VALUES(?,?,?,?)').run('user-a', 'mes', 'admin', 'back');
+    if (tenantBMesGrant) db.prepare('INSERT INTO station_grants(user_id,site,role,scope) VALUES(?,?,?,?)').run('user-b', 'mes', 'admin', 'back');
+    db.prepare('INSERT INTO station_grants(user_id,site,role,scope) VALUES(?,?,?,?)').run('user-a', 'erp', 'admin', 'back');
+  }
+  if (!emptyMesIdentity) db.prepare('INSERT INTO station_sessions(token_hash,user_id,expires_at) VALUES(?,?,?)').run('secret-session-hash', 'user-a', 9999999999999);
   db.prepare('INSERT INTO mes_products(id,organization_id,sku,name) VALUES(?,?,?,?)').run('product-a', 'tenant-a', 'SKU-A', 'Product A');
   db.prepare('INSERT INTO mes_bom_versions(id,organization_id,product_id) VALUES(?,?,?)').run('bom-a', 'tenant-a', 'product-a');
   db.prepare('INSERT INTO mes_work_centers(id,organization_id,code,name) VALUES(?,?,?,?)').run('center-a', 'tenant-a', 'C-A', 'Center A');
@@ -61,23 +68,36 @@ function makeSharedSource(file, { badReporter = false, pendingOutbox = false, pr
     db.prepare('INSERT INTO idempotency_keys(id,organization_id,key,endpoint,request_hash,response_status,response_body) VALUES(?,?,?,?,?,?,?)').run('idem-a', 'tenant-a', 'report-retry-001', '/station/mes/report', requestHash, 200, JSON.stringify({workOrderId:'wo-a',reportId:'report-a',goodQuantity:4,scrapQuantity:0,totalCompleted:4,totalScrapped:0,status:'in_progress'}));
     db.prepare('INSERT INTO idempotency_keys(id,organization_id,key,endpoint,request_hash,response_status,response_body) VALUES(?,?,?,?,?,?,?)').run('idem-other', 'tenant-a', 'other-station-001', '/api/shop/checkout', 'other-hash', 200, '{}');
   }
-  db.prepare('INSERT INTO mes_finished_goods_batches(id,organization_id,work_order_id,report_id,batch_number,quantity,status) VALUES(?,?,?,?,?,?,?)').run('batch-a', 'tenant-a', 'wo-a', 'report-a', 'BATCH-A', 2, 'released');
-  db.prepare('INSERT INTO mes_finished_goods_batches(id,organization_id,work_order_id,report_id,batch_number,quantity,status) VALUES(?,?,?,?,?,?,?)').run('batch-b', 'tenant-a', 'wo-a', 'report-a', 'BATCH-B', 2, 'rework');
-  const dispositionColumns = legacyDispositionSchema ? 'id,organization_id,batch_id,passed_quantity,failed_quantity,disposition' : 'id,organization_id,batch_id,passed_quantity,failed_quantity,disposition,reason';
-  const dispositionValues = legacyDispositionSchema ? '?,?,?,?,?,?' : '?,?,?,?,?,?,?';
-  db.prepare(`INSERT INTO mes_finished_goods_quality_dispositions(${dispositionColumns}) VALUES(${dispositionValues})`).run(...(legacyDispositionSchema ? ['disposition-a','tenant-a','batch-a',2,0,'release'] : ['disposition-a','tenant-a','batch-a',2,0,'release','passed']));
-  db.prepare(`INSERT INTO mes_finished_goods_quality_dispositions(${dispositionColumns}) VALUES(${dispositionValues})`).run(...(legacyDispositionSchema ? ['disposition-b','tenant-a','batch-b',0,2,'rework'] : ['disposition-b','tenant-a','batch-b',0,2,'rework','failed']));
-  db.prepare('INSERT INTO mes_finished_goods_inventory(id,organization_id,batch_id,quantity_on_hand) VALUES(?,?,?,?)').run('inventory-a', 'tenant-a', 'batch-a', 2);
-  db.prepare('INSERT INTO mes_finished_goods_receipts(id,organization_id,batch_id,quantity,idempotency_key) VALUES(?,?,?,?,?)').run('receipt-a', 'tenant-a', 'batch-a', 2, 'receipt-key');
-  db.prepare('INSERT INTO mes_finished_goods_resolutions(id,organization_id,batch_id,disposition,quantity,reason) VALUES(?,?,?,?,?,?)').run('resolution-a', 'tenant-a', 'batch-b', 'rework', 2, 'reinspect');
-  db.prepare('INSERT INTO audit_events(id,organization_id,actor_id,actor_role,action,entity_type,entity_id) VALUES(?,?,?,?,?,?,?)').run('audit-a', 'tenant-a', 'user-a', 'admin', 'mes.report', 'work_order', 'wo-a');
+  if (actualMesRetryKey) {
+    db.prepare('UPDATE mes_production_reports SET idempotency_key=? WHERE id=?').run('source-report-retry-001', 'report-a');
+    db.prepare('INSERT INTO idempotency_keys(id,organization_id,key,endpoint,request_hash,response_status,response_body) VALUES(?,?,?,?,?,?,?)').run(
+      'idem-source-mes', 'tenant-a', 'source-report-retry-001', '/api/mes/report', 'source-report-retry-001', 200,
+      JSON.stringify({ reportId: 'report-a', goodQuantity: 4, scrapQuantity: 0, totalCompleted: 4, totalScrapped: 0, orderStatus: 'in_progress' }),
+    );
+  }
+  if (sourceVariant !== 'projection-only') {
+    db.prepare('INSERT INTO mes_finished_goods_batches(id,organization_id,work_order_id,report_id,batch_number,quantity,status) VALUES(?,?,?,?,?,?,?)').run('batch-a', 'tenant-a', 'wo-a', 'report-a', 'BATCH-A', 2, 'released');
+    db.prepare('INSERT INTO mes_finished_goods_batches(id,organization_id,work_order_id,report_id,batch_number,quantity,status) VALUES(?,?,?,?,?,?,?)').run('batch-b', 'tenant-a', 'wo-a', 'report-a', 'BATCH-B', 2, 'rework');
+    const dispositionColumns = legacyDispositionSchema ? 'id,organization_id,batch_id,passed_quantity,failed_quantity,disposition' : 'id,organization_id,batch_id,passed_quantity,failed_quantity,disposition,reason';
+    const dispositionValues = legacyDispositionSchema ? '?,?,?,?,?,?' : '?,?,?,?,?,?,?';
+    db.prepare(`INSERT INTO mes_finished_goods_quality_dispositions(${dispositionColumns}) VALUES(${dispositionValues})`).run(...(legacyDispositionSchema ? ['disposition-a','tenant-a','batch-a',2,0,'release'] : ['disposition-a','tenant-a','batch-a',2,0,'release','passed']));
+    db.prepare(`INSERT INTO mes_finished_goods_quality_dispositions(${dispositionColumns}) VALUES(${dispositionValues})`).run(...(legacyDispositionSchema ? ['disposition-b','tenant-a','batch-b',0,2,'rework'] : ['disposition-b','tenant-a','batch-b',0,2,'rework','failed']));
+    db.prepare('INSERT INTO mes_finished_goods_inventory(id,organization_id,batch_id,quantity_on_hand) VALUES(?,?,?,?)').run('inventory-a', 'tenant-a', 'batch-a', 2);
+    db.prepare('INSERT INTO mes_finished_goods_receipts(id,organization_id,batch_id,quantity,idempotency_key) VALUES(?,?,?,?,?)').run('receipt-a', 'tenant-a', 'batch-a', 2, 'receipt-key');
+    if (!partialFinishedGoods) db.prepare('INSERT INTO mes_finished_goods_resolutions(id,organization_id,batch_id,disposition,quantity,reason) VALUES(?,?,?,?,?,?)').run('resolution-a', 'tenant-a', 'batch-b', 'rework', 2, 'reinspect');
+  }
+  db.prepare('INSERT INTO audit_events(id,organization_id,actor_id,actor_role,action,entity_type,entity_id) VALUES(?,?,?,?,?,?,?)').run('audit-a', 'tenant-a', 'user-a', 'admin', mesStartAudit ? 'MES_START' : 'mes.report', mesStartAudit ? 'mes' : 'work_order', 'wo-a');
   db.prepare('INSERT INTO audit_events(id,organization_id,actor_id,actor_role,action,entity_type,entity_id) VALUES(?,?,?,?,?,?,?)').run('audit-erp', 'tenant-a', 'user-a', 'admin', 'STATION_GRANT', 'ACCOUNT', 'user-a');
   // The source projection triggers correctly emit events during fixture setup;
   // clear delivery state to model an explicitly reconciled cutover snapshot.
   db.exec('DELETE FROM outbox_events');
   if (badReporter) db.prepare('INSERT INTO mes_downtime_events(id,organization_id,work_center_id,start_time,reason,reporter_id) VALUES(?,?,?,?,?,?)').run('down-a', 'tenant-a', 'center-a', '2026-01-01T00:00:00Z', 'test', 'missing-user');
   if (pendingOutbox) db.prepare('INSERT INTO outbox_events(id,organization_id,event_type,payload) VALUES(?,?,?,?)').run('event-a', 'tenant-a', 'mes.work-order.changed', '{}');
-  if (processedOutbox) db.prepare("INSERT INTO outbox_events(id,organization_id,event_type,payload,status) VALUES(?,?,?,?,'processed')").run('event-processed', 'tenant-a', 'shop.paid', '{}');
+  if (processedOutbox) {
+    db.prepare("INSERT INTO outbox_events(id,organization_id,event_type,payload,status) VALUES(?,?,?,?,'processed')").run('event-processed-mes', 'tenant-a', 'mes.work-order.changed', '{"workOrderId":"wo-a"}');
+    db.prepare("INSERT INTO outbox_events(id,organization_id,event_type,payload,status) VALUES(?,?,?,?,'processed')").run('event-processed-other', 'tenant-a', 'shop.paid', '{"orderId":"synthetic-only"}');
+  }
+  if (nonProcessedOutboxStatus) db.prepare('INSERT INTO outbox_events(id,organization_id,event_type,payload,status) VALUES(?,?,?,?,?)').run('event-nonprocessed', 'tenant-a', 'mes.work-order.changed', '{}', nonProcessedOutboxStatus);
   if (populatedErpMapping) db.prepare('INSERT INTO mes_erp_product_mappings(id,organization_id,mes_product_id,erp_item_id,warehouse_id,version,is_active) VALUES(?,?,?,?,?,?,?)').run('mapping-a', 'tenant-a', 'product-a', 'erp-item-a', 'warehouse-a', 1, 1);
   if (wal) db.exec('PRAGMA journal_mode=WAL');
   db.close();
@@ -117,6 +137,119 @@ test('imports only selected MES tenant, preserves required identities and audit,
   assert.equal(db.prepare("SELECT COUNT(*) AS n FROM outbox_events WHERE event_type LIKE 'mes.%'").get().n, 1, 'target projection is rebuilt from work orders');
   assert.equal(db.prepare('SELECT version FROM mes_repository_schema').get().version, 1);
   db.close();
+});
+
+test('imports a projection-only 0003 source when the full finished-goods schema is absent', t => {
+  const dir = temporary(t), source = path.join(dir, 'projection-only.sqlite'), destination = path.join(dir, 'mes.sqlite');
+  makeSharedSource(source, { sourceVariant: 'projection-only' });
+  const sourceDb = new DatabaseSync(source, { readOnly: true });
+  assert.deepEqual(sourceDb.prepare('SELECT name FROM suite_migrations ORDER BY name').all().map(row => row.name), ['0003_mes_projection']);
+  assert.equal(sourceDb.prepare("SELECT COUNT(*) AS n FROM sqlite_master WHERE type='table' AND name LIKE 'mes_finished_goods_%'").get().n, 0);
+  sourceDb.close();
+
+  const result = migrate(source, destination, ['tenant-a']);
+  assert.equal(result.targetRows.mes_work_orders, 1);
+  const target = new DatabaseSync(destination, { readOnly: true });
+  for (const table of ['mes_finished_goods_batches', 'mes_finished_goods_quality_dispositions', 'mes_finished_goods_inventory', 'mes_finished_goods_receipts', 'mes_finished_goods_resolutions']) {
+    assert.equal(target.prepare(`SELECT COUNT(*) AS n FROM "${table}"`).get().n, 0, `${table} should be initialized empty in target`);
+  }
+  assert.equal(target.prepare('SELECT COUNT(*) AS n FROM mes_work_orders').get().n, 1);
+  target.close();
+});
+
+test('refuses a partial finished-goods schema even when the remaining tables look compatible', t => {
+  const dir = temporary(t), source = path.join(dir, 'partial-finished-goods.sqlite'), destination = path.join(dir, 'mes.sqlite');
+  makeSharedSource(source, { partialFinishedGoods: true });
+  assert.throws(() => migrate(source, destination, ['tenant-a']), /finished.goods|Required source table missing/i);
+  assert.equal(fs.existsSync(destination), false);
+});
+
+test('preserves scoped MES_START audit rows whose action uses the legacy uppercase form', t => {
+  const dir = temporary(t), source = path.join(dir, 'legacy-audit.sqlite'), destination = path.join(dir, 'mes.sqlite');
+  makeSharedSource(source, { mesStartAudit: true });
+  migrate(source, destination, ['tenant-a']);
+  const db = new DatabaseSync(destination, { readOnly: true });
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM audit_events WHERE action='MES_START' AND entity_type='mes'").get().n, 1);
+  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM audit_events WHERE action='STATION_GRANT'").get().n, 0);
+  db.close();
+});
+
+test('refuses publication when source identities have no MES account or grant mapping', t => {
+  const dir = temporary(t), source = path.join(dir, 'unmapped-identity.sqlite'), destination = path.join(dir, 'mes.sqlite');
+  makeSharedSource(source, { emptyMesIdentity: true });
+  const sourceDb = new DatabaseSync(source, { readOnly: true });
+  assert.equal(sourceDb.prepare('SELECT COUNT(*) AS n FROM users').get().n, 2);
+  assert.equal(sourceDb.prepare('SELECT COUNT(*) AS n FROM memberships').get().n, 2);
+  assert.equal(sourceDb.prepare('SELECT COUNT(*) AS n FROM station_accounts').get().n, 0);
+  assert.equal(sourceDb.prepare("SELECT COUNT(*) AS n FROM station_grants WHERE site='mes'").get().n, 0);
+  sourceDb.close();
+
+  assert.throws(() => migrate(source, destination, ['tenant-a']), /station account|MES grant|identity.*mapping|access.*enroll/i);
+  assert.equal(fs.existsSync(destination), false);
+});
+
+test('refuses the observed source report-retry contract until its identity and response mapping is reviewed', t => {
+  const dir = temporary(t), source = path.join(dir, 'source-report-retry.sqlite'), destination = path.join(dir, 'mes.sqlite');
+  makeSharedSource(source, { actualMesRetryKey: true });
+  const sourceDb = new DatabaseSync(source, { readOnly: true });
+  assert.equal(sourceDb.prepare("SELECT COUNT(*) AS n FROM idempotency_keys WHERE endpoint='/api/mes/report'").get().n, 1);
+  assert.equal(sourceDb.prepare("SELECT COUNT(*) AS n FROM mes_production_reports WHERE idempotency_key='source-report-retry-001'").get().n, 1);
+  sourceDb.close();
+
+  assert.throws(() => migrate(source, destination, ['tenant-a']), /report retry.*mapping|idempotency.*mapping|unverifiable.*retry/i);
+  assert.equal(fs.existsSync(destination), false);
+});
+
+test('keeps processed source outbox history in an explicit immutable archive and rebuilds target events', t => {
+  const dir = temporary(t), source = path.join(dir, 'processed-outbox.sqlite'), destination = path.join(dir, 'mes.sqlite'), archive = path.join(dir, 'source-archive.sqlite');
+  makeSharedSource(source, { processedOutbox: true });
+  const sourceHash = sha256(source);
+  const sourceDb = new DatabaseSync(source, { readOnly: true });
+  const sourceRows = sourceDb.prepare('SELECT id,organization_id,event_type,payload,status,retry_count,created_at FROM outbox_events ORDER BY id').all();
+  sourceDb.close();
+  const expectedOutboxDigest = createHash('sha256').update(JSON.stringify(sourceRows.map(row => Object.values(row)))).digest('hex');
+
+  const result = migrate(source, destination, ['tenant-a'], {
+    outboxReconciliation: { reviewed: true, archivePath: archive },
+  });
+  assert.equal(sha256(source), sourceHash, 'source remains unchanged');
+  assert.equal(fs.existsSync(archive), true, 'reviewed source archive is retained after migration');
+  assert.equal(result.outboxReconciliation.rowCount, 2);
+  assert.deepEqual(result.outboxReconciliation.statusCounts, { processed: 2 });
+  assert.equal(result.outboxReconciliation.contentSha256, expectedOutboxDigest);
+  assert.match(result.outboxReconciliation.archiveSha256, /^[0-9a-f]{64}$/);
+  assert.equal(sha256(archive), result.outboxReconciliation.archiveSha256, 'manifest archive digest verifies the retained file');
+
+  const archived = new DatabaseSync(archive, { readOnly: true });
+  assert.equal(archived.prepare('SELECT COUNT(*) AS n FROM outbox_events').get().n, 2);
+  assert.equal(archived.prepare("SELECT COUNT(*) AS n FROM outbox_events WHERE status!='processed'").get().n, 0);
+  archived.close();
+  const target = new DatabaseSync(destination, { readOnly: true });
+  assert.equal(target.prepare("SELECT COUNT(*) AS n FROM outbox_events WHERE event_type='shop.paid'").get().n, 0, 'processed external events are not replayed');
+  assert.equal(target.prepare("SELECT COUNT(*) AS n FROM outbox_events WHERE event_type='mes.work-order.changed'").get().n, 1, 'MES projection is rebuilt from imported work orders');
+  target.close();
+});
+
+test('requires an explicit reviewed archive path before reconciling processed outbox history', t => {
+  const dir = temporary(t), source = path.join(dir, 'processed-outbox.sqlite'), destination = path.join(dir, 'mes.sqlite');
+  makeSharedSource(source, { processedOutbox: true });
+  assert.throws(() => migrate(source, destination, ['tenant-a'], {
+    outboxReconciliation: { reviewed: true },
+  }), /archive.*required|archive path|retain.*archive/i);
+  assert.equal(fs.existsSync(destination), false);
+});
+
+test('does not archive or publish outbox rows with pending, failed, or unknown status', async t => {
+  for (const status of ['pending', 'failed', 'unknown']) {
+    await t.test(status, t => {
+      const dir = temporary(t), source = path.join(dir, 'nonprocessed-outbox.sqlite'), destination = path.join(dir, 'mes.sqlite'), archive = path.join(dir, 'source-archive.sqlite');
+      makeSharedSource(source, { nonProcessedOutboxStatus: status });
+      assert.throws(() => migrate(source, destination, ['tenant-a'], {
+        outboxReconciliation: { reviewed: true, archivePath: archive },
+      }), /outbox|status|delivery/i);
+      assert.equal(fs.existsSync(destination), false);
+    });
+  }
 });
 
 test('preserves verified MES report retry key and response while excluding other station keys', t => {
@@ -209,19 +342,15 @@ test('refuses populated MES-to-ERP mappings rather than copying cross-station re
   assert.equal(fs.existsSync(destination), false);
 });
 
-test('uses only the verified snapshot when the live source changes after snapshot creation', t => {
+test('refuses publication when the live source changes after snapshot creation', t => {
   const dir = temporary(t), source = path.join(dir, 'shared.sqlite'), destination = path.join(dir, 'mes.sqlite');
   makeSharedSource(source, { tenantBMesGrant: true, wal: true });
-  const result = migrate(source, destination, ['tenant-b'], {
+  assert.throws(() => migrate(source, destination, ['tenant-b'], {
     afterSnapshot() {
       const changed = new DatabaseSync(source);
       changed.prepare("UPDATE station_grants SET site='erp' WHERE user_id='user-b' AND site='mes'").run();
       changed.close();
     },
-  });
-  assert.deepEqual(result.organizationIds, ['tenant-b']);
-  const db = new DatabaseSync(destination, { readOnly: true });
-  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM station_grants WHERE user_id='user-b' AND site='mes'").get().n, 1);
-  assert.equal(db.prepare("SELECT COUNT(*) AS n FROM organizations WHERE id='tenant-b'").get().n, 1);
-  db.close();
+  }), /source.*(changed|stable)|unstable.*source|snapshot.*changed/i);
+  assert.equal(fs.existsSync(destination), false, 'a moving source must not publish a partial cutover target');
 });
