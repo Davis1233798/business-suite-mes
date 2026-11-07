@@ -152,12 +152,12 @@ function publishArchive(snapshot, reconciliation) {
     fs.copyFileSync(snapshot, temporary, fs.constants.COPYFILE_EXCL);
     if (process.platform !== 'win32') fs.chmodSync(temporary, 0o400);
     const hash = createHash('sha256');
-    const fd = fs.openSync(temporary, 'r');
+    const fd = fs.openSync(temporary, process.platform === 'win32' ? 'r+' : 'r');
     try {
       const buffer = Buffer.alloc(1024 * 1024);
       let read;
       while ((read = fs.readSync(fd, buffer)) > 0) hash.update(buffer.subarray(0, read));
-      fs.fsyncSync(fd);
+      if (process.platform !== 'win32') fs.fsyncSync(fd);
     } finally {
       fs.closeSync(fd);
     }
@@ -352,7 +352,7 @@ export function migrate(sourcePath, destinationPath, organizationIds, { afterSna
     const targetCounts = Object.fromEntries([...COPY_TABLES].map(table => [table, count(target, table)]));
     target.close(); target = undefined;
     backup.close(); backup = undefined;
-    const syncFd = fs.openSync(stagingPath, 'r');
+    const syncFd = fs.openSync(stagingPath, 'r+');
     try { fs.fsyncSync(syncFd); } finally { fs.closeSync(syncFd); }
     function requireUnchangedSource() {
       if (source.prepare('PRAGMA data_version').get().data_version !== sourceVersion) {

@@ -70,7 +70,8 @@ function makeSharedSource(file, { badReporter = false, pendingOutbox = false, pr
   }
   if (actualMesRetryKey) {
     db.prepare('UPDATE mes_production_reports SET idempotency_key=? WHERE id=?').run('source-report-retry-001', 'report-a');
-    db.exec("UPDATE mes_work_orders SET completed_quantity=4,status='in_progress' WHERE id='wo-a'");
+    db.exec("UPDATE mes_work_orders SET status='in_progress' WHERE id='wo-a'");
+    db.exec("UPDATE mes_work_orders SET completed_quantity=4 WHERE id='wo-a'");
     db.prepare('INSERT INTO idempotency_keys(id,organization_id,key,endpoint,request_hash,response_status,response_body) VALUES(?,?,?,?,?,?,?)').run(
       'idem-source-mes', 'tenant-a', 'source-report-retry-001', '/api/mes/report', 'source-report-retry-001', 200,
       JSON.stringify({ reportId: 'report-a', goodQuantity: 4, scrapQuantity: 0, totalCompleted: 4, totalScrapped: 0, orderStatus: 'in_progress' }),
@@ -206,6 +207,7 @@ test('converts a reviewed MES retry using the committed report and enrolled acto
   makeSharedSource(source, { actualMesRetryKey: true });
   const fixture = new DatabaseSync(source);
   fixture.prepare('UPDATE mes_production_reports SET notes=? WHERE id=?').run('校驗 <&>', 'report-a');
+  fixture.exec('DELETE FROM outbox_events');
   fixture.close();
   const sourceHash = sha256(source);
   migrate(source, destination, ['tenant-a'], {
