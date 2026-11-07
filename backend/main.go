@@ -102,6 +102,12 @@ func openDB(file string) (*sql.DB, error) {
 		return nil, e
 	}
 	db.SetMaxOpenConns(1)
+	success := false
+	defer func() {
+		if !success {
+			db.Close()
+		}
+	}()
 	if _, e = db.Exec("PRAGMA foreign_keys=ON; PRAGMA busy_timeout=10000; PRAGMA journal_mode=WAL;"); e != nil {
 		return nil, e
 	}
@@ -147,6 +153,7 @@ func openDB(file string) (*sql.DB, error) {
 	if e = tx.Commit(); e != nil {
 		return nil, e
 	}
+	success = true
 	return db, nil
 }
 func writeJSON(w http.ResponseWriter, status int, data any) {

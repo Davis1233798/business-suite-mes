@@ -145,9 +145,10 @@ node --test tests/migration/mes-go-db.test.mjs
 The command emits table counts and a source content hash, never row contents.
 The importer accepts the complete or projection-only schema described above,
 retains scoped `MES_START` audits, and checks for enabled MES station accounts
-and grants. It refuses legacy `/api/mes/report` retry state pending a reviewed
-mapping. The account and grant check is structural; production enrollment and
-login acceptance remain separate.
+and grants. Legacy `/api/mes/report` retry state requires the explicit
+[reviewed report mapping](MES_LEGACY_REPORT_REPLAY.md). The account and grant
+check is structural. Production enrollment and login acceptance remain
+separate.
 
 When every outbox row is processed, `--reviewed-outbox-archive ARCHIVE.sqlite`
 retains the full verified source snapshot at a new path. The archive contains

@@ -70,6 +70,8 @@ function makeSharedSource(file, { badReporter = false, pendingOutbox = false, pr
   }
   if (actualMesRetryKey) {
     db.prepare('UPDATE mes_production_reports SET idempotency_key=? WHERE id=?').run('source-report-retry-001', 'report-a');
+    db.exec("UPDATE mes_work_orders SET status='in_progress' WHERE id='wo-a'");
+    db.exec("UPDATE mes_work_orders SET completed_quantity=4 WHERE id='wo-a'");
     db.prepare('INSERT INTO idempotency_keys(id,organization_id,key,endpoint,request_hash,response_status,response_body) VALUES(?,?,?,?,?,?,?)').run(
       'idem-source-mes', 'tenant-a', 'source-report-retry-001', '/api/mes/report', 'source-report-retry-001', 200,
       JSON.stringify({ reportId: 'report-a', goodQuantity: 4, scrapQuantity: 0, totalCompleted: 4, totalScrapped: 0, orderStatus: 'in_progress' }),
@@ -197,6 +199,65 @@ test('refuses the observed source report-retry contract until its identity and r
   sourceDb.close();
 
   assert.throws(() => migrate(source, destination, ['tenant-a']), /report retry.*mapping|idempotency.*mapping|unverifiable.*retry/i);
+  assert.equal(fs.existsSync(destination), false);
+});
+
+test('converts a reviewed MES retry using the committed report and enrolled actor', t => {
+  const dir = temporary(t), source = path.join(dir, 'legacy-replay.sqlite'), destination = path.join(dir, 'mes.sqlite');
+  makeSharedSource(source, { actualMesRetryKey: true });
+  const fixture = new DatabaseSync(source);
+  fixture.prepare('UPDATE mes_production_reports SET notes=? WHERE id=?').run('校驗 <&>', 'report-a');
+  fixture.exec('DELETE FROM outbox_events');
+  fixture.close();
+  const sourceHash = sha256(source);
+  migrate(source, destination, ['tenant-a'], {
+    legacyReportMappings: [{ organizationId: 'tenant-a', legacyOperatorId: 'user-a', stationUserId: 'user-a' }],
+  });
+
+  const target = new DatabaseSync(destination, { readOnly: true });
+  try {
+    const row = target.prepare("SELECT endpoint,request_hash,response_body FROM idempotency_keys WHERE key='source-report-retry-001'").get();
+    const nativeCommand = String.raw`{"action":"report","workOrderId":"wo-a","operationId":"op-a","goodQuantity":4,"scrapQuantity":0,"notes":"校驗 \u003c\u0026\u003e","idempotencyKey":"source-report-retry-001"}`;
+    assert.equal(row.endpoint, '/station/mes/report');
+    assert.equal(row.request_hash, createHash('sha256').update('user-a\0' + nativeCommand).digest('hex'));
+    assert.deepEqual(JSON.parse(row.response_body), {
+      workOrderId: 'wo-a', reportId: 'report-a', goodQuantity: 4, scrapQuantity: 0,
+      totalCompleted: 4, totalScrapped: 0, status: 'in_progress',
+    });
+    assert.equal(target.prepare("SELECT count(*) AS n FROM mes_production_reports WHERE id='report-a'").get().n, 1);
+    assert.equal(sha256(source), sourceHash);
+  } finally {
+    target.close();
+  }
+  const replay = spawnSync('go', ['test', '-run', '^TestMESImportedRetryReplay$', '-count=1', '.'], {
+    cwd: path.join(root, 'backend'),
+    env: { ...process.env, MES_IMPORTED_RETRY_DB: destination, MES_IMPORTED_RETRY_LEGACY: '1' },
+    encoding: 'utf8',
+  });
+  assert.equal(replay.status, 0, `Go API legacy replay failed:\n${replay.stdout}\n${replay.stderr}`);
+});
+
+test('refuses reviewed legacy retry conversion when cached quantities disagree with the report', t => {
+  const dir = temporary(t), source = path.join(dir, 'invalid-replay.sqlite'), destination = path.join(dir, 'mes.sqlite');
+  makeSharedSource(source, { actualMesRetryKey: true });
+  const fixture = new DatabaseSync(source);
+  fixture.exec("UPDATE idempotency_keys SET response_body=json_set(response_body,'$.goodQuantity',99) WHERE endpoint='/api/mes/report'");
+  fixture.close();
+  assert.throws(() => migrate(source, destination, ['tenant-a'], {
+    legacyReportMappings: [{ organizationId: 'tenant-a', legacyOperatorId: 'user-a', stationUserId: 'user-a' }],
+  }), /cached.*quantit|legacy retry.*report mismatch/i);
+  assert.equal(fs.existsSync(destination), false);
+});
+
+test('refuses to overwrite an existing native key during legacy retry conversion', t => {
+  const dir = temporary(t), source = path.join(dir, 'retry-conflict.sqlite'), destination = path.join(dir, 'mes.sqlite');
+  makeSharedSource(source, { actualMesRetryKey: true, retryKey: true });
+  const fixture = new DatabaseSync(source);
+  fixture.exec("UPDATE idempotency_keys SET key='source-report-retry-001' WHERE endpoint='/station/mes/report'");
+  fixture.close();
+  assert.throws(() => migrate(source, destination, ['tenant-a'], {
+    legacyReportMappings: [{ organizationId: 'tenant-a', legacyOperatorId: 'user-a', stationUserId: 'user-a' }],
+  }), /conflicts with an existing native retry key/);
   assert.equal(fs.existsSync(destination), false);
 });
 
