@@ -143,12 +143,19 @@ node --test tests/migration/mes-go-db.test.mjs
 ```
 
 The command emits table counts and a source content hash, never row contents.
-The current importer implementation still rejects every source outbox row,
-requires the finished-goods source tables, copies only lowercase `mes.%`
-audits, and does not verify that each selected organization has a usable Go
-MES account/grant. The test-first contract above is intentionally not claimed
-as implemented; update this implementation status only after the importer
-change is reviewed and its remote tests pass.
+The importer accepts the complete or projection-only schema described above,
+retains scoped `MES_START` audits, and checks for enabled MES station accounts
+and grants. It refuses legacy `/api/mes/report` retry state pending a reviewed
+mapping. The account and grant check is structural; production enrollment and
+login acceptance remain separate.
+
+When every outbox row is processed, `--reviewed-outbox-archive ARCHIVE.sqlite`
+retains the full verified source snapshot at a new path. The archive contains
+all source tenants and domains. Use a private directory (0700 on Linux or
+owner-only ACLs on Windows). The migration result records the archive SHA-256,
+outbox content SHA-256 and counts. The archive is published without replacing
+an existing file and retained if target publication later fails. Source writes
+observed after snapshot creation cause refusal.
 
 ## CI fixture and limits
 
@@ -157,10 +164,8 @@ shared multi-station schema with finished goods. The test-first additions also
 model the observed projection-only `0003` source, partial finished-goods
 schemas, `MES_START` audit scope, empty station-account/grant inventory,
 processed outbox archival, rejected non-processed states, and the observed
-`/api/mes/report` retry-state shape. These new contract tests are expected to
-fail against the current implementation until the production importer is
-reviewed and updated. Cases never use live database files. No local tests are
-run during this change.
+`/api/mes/report` retry-state shape. Cases use disposable data. The importer
+changes await GitHub Actions results and review before merge.
 
 Passing CI will establish only the synthetic path. It will not certify actual
 source data, a complete application workflow, production downtime, deployment,

@@ -19,6 +19,10 @@ export const REBUILT_TABLES = ['outbox_events', 'suite_migrations', 'mes_project
 export const EXCLUDED_PREFIXES = ['erp_', 'pos_', 'crm_', 'dining_', 'shop_'];
 export const CROSS_STATION_TABLES = ['mes_erp_product_mappings', 'erp_mes_receipt_postings'];
 
+const finishedGoodsTables = MES_TABLES.filter(table => table.startsWith('mes_finished_goods_'));
+const finishedGoodsVersions = ['0006_mes_finished_goods', '0007_mes_finished_goods_resolutions'];
+const mesAudit = "(action LIKE 'mes.%' OR (action='MES_START' AND entity_type='mes'))";
+
 const q = value => `"${String(value).replaceAll('"', '""')}"`;
 const sqlLiteral = value => `'${String(value).replaceAll("'", "''")}'`;
 const tables = db => new Set(db.prepare("SELECT name FROM sqlite_master WHERE type='table' AND name NOT LIKE 'sqlite_%'").all().map(row => row.name));
@@ -92,10 +96,21 @@ function assertSource(source) {
   if (names.has('mes_repository_schema')) throw new Error('Source is already marked as an independent MES database, not the shared Portfolio Go database');
   const applied = source.prepare('SELECT name FROM suite_migrations ORDER BY name').all().map(row => row.name);
   if (!applied.includes('0003_mes_projection')) throw new Error('Unsupported shared Go source version: 0003_mes_projection is absent');
-  const allowedVersions = new Set(['0003_mes_projection', '0006_mes_finished_goods', '0007_mes_finished_goods_resolutions']);
+  const allowedVersions = new Set(['0003_mes_projection', ...finishedGoodsVersions]);
   const unknownVersions = applied.filter(name => !allowedVersions.has(name));
   if (unknownVersions.length) throw new Error(`Unsupported shared Go migrations: ${unknownVersions.join(', ')}`);
-  for (const table of COPY_TABLES) if (!names.has(table)) throw new Error(`Required source table missing: ${table}`);
+  const goodsTablesPresent = finishedGoodsTables.filter(table => names.has(table)).length;
+  const goodsVersionsPresent = finishedGoodsVersions.filter(version => applied.includes(version)).length;
+  const projectionOnly = goodsTablesPresent === 0 && goodsVersionsPresent === 0;
+  if (!projectionOnly && (goodsTablesPresent !== finishedGoodsTables.length || goodsVersionsPresent !== finishedGoodsVersions.length)) {
+    throw new Error('Inconsistent source finished-goods tables and migration markers');
+  }
+  for (const table of COPY_TABLES) {
+    if (!names.has(table) && !(projectionOnly && finishedGoodsTables.includes(table))) {
+      throw new Error(`Required source table missing: ${table}`);
+    }
+  }
+  if (!names.has('idempotency_keys')) throw new Error('Required source table missing: idempotency_keys');
   for (const table of RESET_TABLES) if (!names.has(table)) throw new Error(`Required source table missing: ${table}`);
   for (const table of REBUILT_TABLES) if (!names.has(table)) throw new Error(`Required source table missing: ${table}`);
   const unknownMes = [...names].filter(name => name.startsWith('mes_') && !MES_TABLES.includes(name) && !['mes_repository_schema', 'mes_projection_revisions', ...CROSS_STATION_TABLES].includes(name));
@@ -103,9 +118,53 @@ function assertSource(source) {
   for (const table of CROSS_STATION_TABLES) {
     if (names.has(table) && count(source, table) !== 0) throw new Error(`Cross-station MES/ERP table ${table} contains rows; resolve the integration before migration`);
   }
-  const pending = source.prepare('SELECT COUNT(*) AS n FROM outbox_events').get().n;
-  if (pending) throw new Error(`Source outbox contains ${pending} rows; resolve or explicitly reconcile before migration`);
   return names;
+}
+
+function checkOutbox(source, reconciliation, sourceFile, destinationFile) {
+  const rows = source.prepare('SELECT id,organization_id,event_type,payload,status,retry_count,created_at FROM outbox_events ORDER BY id').all();
+  if (!rows.length) return undefined;
+  if (rows.some(row => row.status !== 'processed')) throw new Error('Source outbox contains unresolved delivery statuses');
+  if (reconciliation?.reviewed !== true || typeof reconciliation.archivePath !== 'string' || !reconciliation.archivePath.trim()) {
+    throw new Error('Source outbox contains processed rows; an explicit reviewed archive path is required');
+  }
+  const archivePath = path.resolve(reconciliation.archivePath);
+  const parent = fs.statSync(path.dirname(archivePath));
+  if (!parent.isDirectory() || (process.platform !== 'win32' && (parent.mode & 0o077) !== 0)) {
+    throw new Error('Source archive requires an existing private parent directory');
+  }
+  if ([sourceFile, destinationFile].includes(archivePath) || fs.existsSync(archivePath)) {
+    throw new Error('Source archive path must be distinct and unused');
+  }
+  return {
+    archivePath,
+    rowCount: rows.length,
+    statusCounts: { processed: rows.length },
+    contentSha256: createHash('sha256').update(JSON.stringify(rows.map(row => Object.values(row)))).digest('hex'),
+  };
+}
+
+function publishArchive(snapshot, reconciliation) {
+  const privateDir = fs.mkdtempSync(path.join(path.dirname(reconciliation.archivePath), '.mes-archive-'));
+  const temporary = path.join(privateDir, 'source.sqlite');
+  try {
+    fs.copyFileSync(snapshot, temporary, fs.constants.COPYFILE_EXCL);
+    if (process.platform !== 'win32') fs.chmodSync(temporary, 0o400);
+    const hash = createHash('sha256');
+    const fd = fs.openSync(temporary, 'r');
+    try {
+      const buffer = Buffer.alloc(1024 * 1024);
+      let read;
+      while ((read = fs.readSync(fd, buffer)) > 0) hash.update(buffer.subarray(0, read));
+      fs.fsyncSync(fd);
+    } finally {
+      fs.closeSync(fd);
+    }
+    fs.linkSync(temporary, reconciliation.archivePath);
+    return { ...reconciliation, archiveSha256: hash.digest('hex') };
+  } finally {
+    fs.rmSync(privateDir, { recursive: true, force: true });
+  }
 }
 
 function identityPlan(source, organizationIds) {
@@ -116,7 +175,7 @@ function identityPlan(source, organizationIds) {
   };
   add(`SELECT user_id FROM memberships WHERE organization_id IN (${orgMarks})`);
   add(`SELECT user_id FROM station_accounts WHERE organization_id IN (${orgMarks})`);
-  add(`SELECT actor_id FROM audit_events WHERE organization_id IN (${orgMarks}) AND action LIKE 'mes.%'`);
+  add(`SELECT actor_id FROM audit_events WHERE organization_id IN (${orgMarks}) AND ${mesAudit}`);
   add(`SELECT reporter_id FROM mes_downtime_events WHERE organization_id IN (${orgMarks})`);
   add(`SELECT operator_id FROM mes_production_reports WHERE organization_id IN (${orgMarks})`);
   add(`SELECT inspector_id FROM mes_quality_checks WHERE organization_id IN (${orgMarks})`);
@@ -175,7 +234,7 @@ function applyTargetSchema(target) {
   // after importing rows, so no source delivery state is replayed.
 }
 
-export function migrate(sourcePath, destinationPath, organizationIds, { afterSnapshot } = {}) {
+export function migrate(sourcePath, destinationPath, organizationIds, { afterSnapshot, outboxReconciliation } = {}) {
   if (!Array.isArray(organizationIds) || organizationIds.length === 0 || organizationIds.some(id => typeof id !== 'string' || !id)) {
     throw new Error('Specify one or more exact --organization IDs; wildcard migration is disabled');
   }
@@ -191,16 +250,18 @@ export function migrate(sourcePath, destinationPath, organizationIds, { afterSna
   const stagingPath = path.join(privateDir, 'mes-target.sqlite');
   try {
     source = new DatabaseSync(sourceFile, { readOnly: true });
+    const sourceVersion = source.prepare('PRAGMA data_version').get().data_version;
     assertSource(source);
     const before = manifestSnapshot(source);
     source.exec(`VACUUM INTO ${sqlLiteral(backupPath)}`);
     backup = new DatabaseSync(backupPath, { readOnly: true });
-    assertSource(backup);
+    const sourceTables = assertSource(backup);
     if (manifestSnapshot(backup) !== before) throw new Error('Consistent backup content does not match source snapshot');
     // All migration decisions after this point must use the immutable snapshot.
     // The optional callback is only used by synthetic tests to simulate a
     // concurrent source change and prove that decisions do not drift to source.
     afterSnapshot?.();
+    const archivePlan = checkOutbox(backup, outboxReconciliation, sourceFile, destinationFile);
 
     const marks = selectedOrgIds.map(() => '?').join(',');
     const existing = new Set(backup.prepare(`SELECT id FROM organizations WHERE id IN (${marks})`).all(...selectedOrgIds).map(row => row.id));
@@ -208,11 +269,26 @@ export function migrate(sourcePath, destinationPath, organizationIds, { afterSna
     if (missing.length) throw new Error(`Selected organization not found: ${missing.join(', ')}`);
     const businessOrgIds = new Set();
     for (const table of MES_TABLES) {
+      if (!sourceTables.has(table)) continue;
       for (const row of backup.prepare(`SELECT DISTINCT organization_id FROM ${q(table)} WHERE organization_id IN (${marks})`).all(...selectedOrgIds)) businessOrgIds.add(row.organization_id);
     }
     for (const row of backup.prepare(`SELECT DISTINCT a.organization_id FROM station_grants g JOIN station_accounts a ON a.user_id=g.user_id WHERE g.site='mes' AND a.organization_id IN (${marks})`).all(...selectedOrgIds)) businessOrgIds.add(row.organization_id);
     const noMes = selectedOrgIds.filter(id => !businessOrgIds.has(id));
     if (noMes.length) throw new Error(`Selected tenant has no MES business data or MES identity grant: ${noMes.join(', ')}`);
+    const unmappedRetry = backup.prepare(`
+      SELECT 1 FROM idempotency_keys
+      WHERE organization_id IN (${marks}) AND endpoint='/api/mes/report' LIMIT 1
+    `).get(...selectedOrgIds);
+    if (unmappedRetry) throw new Error('Source MES report retry requires reviewed identity and response mapping');
+    const mappedOrgs = new Set(backup.prepare(`
+      SELECT DISTINCT a.organization_id FROM station_accounts a
+      JOIN station_grants g ON a.user_id=g.user_id AND g.site='mes'
+      WHERE a.organization_id IN (${marks}) AND a.disabled=0 AND g.enabled=1
+        AND length(trim(a.password_hash))>0
+    `).all(...selectedOrgIds).map(row => row.organization_id));
+    if (selectedOrgIds.some(id => !mappedOrgs.has(id))) {
+      throw new Error('Selected tenant is missing a usable MES station account and grant mapping');
+    }
 
     const users = identityPlan(backup, selectedOrgIds);
     const fd = fs.openSync(stagingPath, 'wx', 0o600); fs.closeSync(fd);
@@ -225,8 +301,12 @@ export function migrate(sourcePath, destinationPath, organizationIds, { afterSna
     if (users.length) copied.users = copyRows(backup, target, 'users', `id IN (${users.map(() => '?').join(',')})`, users);
     else copied.users = 0;
     copied.memberships = copyRows(backup, target, 'memberships', `organization_id IN (${marks})`, selectedOrgIds);
-    for (const table of MES_TABLES) copied[table] = copyRows(backup, target, table, `organization_id IN (${marks})`, selectedOrgIds);
-    copied.audit_events = copyRows(backup, target, 'audit_events', `organization_id IN (${marks}) AND action LIKE 'mes.%'`, selectedOrgIds);
+    for (const table of MES_TABLES) {
+      copied[table] = sourceTables.has(table)
+        ? copyRows(backup, target, table, `organization_id IN (${marks})`, selectedOrgIds)
+        : 0;
+    }
+    copied.audit_events = copyRows(backup, target, 'audit_events', `organization_id IN (${marks}) AND ${mesAudit}`, selectedOrgIds);
     copied.station_accounts = copyRows(backup, target, 'station_accounts', `organization_id IN (${marks})`, selectedOrgIds);
     const accountIds = copied.station_accounts
       ? target.prepare(`SELECT user_id FROM station_accounts WHERE organization_id IN (${marks})`).all(...selectedOrgIds).map(row => row.user_id)
@@ -267,12 +347,20 @@ export function migrate(sourcePath, destinationPath, organizationIds, { afterSna
     const targetCounts = Object.fromEntries([...COPY_TABLES].map(table => [table, count(target, table)]));
     target.close(); target = undefined;
     backup.close(); backup = undefined;
-    source.close(); source = undefined;
     const syncFd = fs.openSync(stagingPath, 'r');
     try { fs.fsyncSync(syncFd); } finally { fs.closeSync(syncFd); }
+    function requireUnchangedSource() {
+      if (source.prepare('PRAGMA data_version').get().data_version !== sourceVersion) {
+        throw new Error('Source changed after the migration snapshot was created');
+      }
+    }
+    requireUnchangedSource();
+    if (fs.existsSync(destinationFile)) throw new Error('Destination already exists');
+    const retainedArchive = archivePlan ? publishArchive(backupPath, archivePlan) : undefined;
+    requireUnchangedSource();
     // Atomic no-clobber publication. linkSync fails if destination already exists.
     fs.linkSync(stagingPath, destinationFile);
-    return { source: sourceFile, destination: destinationFile, organizationIds: selectedOrgIds, sourceSnapshotContentSha256: before, copiedRows: copied, targetRows: targetCounts, resetTables: RESET_TABLES, rebuiltTables: REBUILT_TABLES, sessionsCopied: false };
+    return { source: sourceFile, destination: destinationFile, organizationIds: selectedOrgIds, sourceSnapshotContentSha256: before, copiedRows: copied, targetRows: targetCounts, resetTables: RESET_TABLES, rebuiltTables: REBUILT_TABLES, sessionsCopied: false, outboxReconciliation: retainedArchive };
   } finally {
     target?.close(); backup?.close(); source?.close();
     fs.rmSync(privateDir, { recursive: true, force: true });
@@ -280,16 +368,19 @@ export function migrate(sourcePath, destinationPath, organizationIds, { afterSna
 }
 
 function cli(args) {
-  if (args.length < 3 || args[0] !== '--source' || args[2] !== '--destination') {
-    throw new Error('Usage: node scripts/migrate-mes-go-db.mjs --source OLD.sqlite --destination NEW.sqlite --organization ORG_ID [--organization ORG_ID ...]');
+  if (args.length < 4 || args[0] !== '--source' || args[2] !== '--destination') {
+    throw new Error('Usage: node scripts/migrate-mes-go-db.mjs --source OLD.sqlite --destination NEW.sqlite --organization ORG_ID [--organization ORG_ID ...] [--reviewed-outbox-archive ARCHIVE.sqlite]');
   }
   const source = args[1], destination = args[3];
   const organizations = [];
+  let outboxReconciliation;
   for (let i = 4; i < args.length; i++) {
-    if (args[i] !== '--organization' || !args[i + 1]) throw new Error(`Unexpected argument: ${args[i]}`);
-    organizations.push(args[++i]);
+    if (args[i] === '--organization' && args[i + 1]) organizations.push(args[++i]);
+    else if (args[i] === '--reviewed-outbox-archive' && args[i + 1] && !outboxReconciliation) {
+      outboxReconciliation = { reviewed: true, archivePath: args[++i] };
+    } else throw new Error(`Unexpected argument: ${args[i]}`);
   }
-  return migrate(source, destination, organizations);
+  return migrate(source, destination, organizations, { outboxReconciliation });
 }
 
 if (process.argv[1] && import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href) {
