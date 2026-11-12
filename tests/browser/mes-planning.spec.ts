@@ -41,4 +41,22 @@ test('MES back office creates a BOM and releases a work order with it', async ({
     has: page.getByRole('heading', { name: /^Work orders/ }),
   });
   await expect(workOrders.getByRole('cell', { name: 'BROWSER-PLANNING-1', exact: true })).toBeVisible();
+
+  await bom.getByLabel('Source BOM version').selectOption({label: 'v987654'});
+  await bom.getByRole('button', {name: 'Load materials'}).click();
+  await bom.getByLabel('Quantity for TEST-BROWSER-MATERIAL').fill('2');
+  await bom.getByRole('button', {name: 'Create BOM version'}).click();
+  await expect(bom.getByRole('status')).toHaveText('BOM version created');
+
+  await page.reload();
+  const response = await page.request.get('/api/stations/mes/data?view=back');
+  expect(response.ok()).toBeTruthy();
+  const {data} = await response.json();
+  const original = data.bomVersions.find(row => row.productId === productId && row.version === 987654);
+  const revision = data.bomVersions.find(row => row.productId === productId && row.version === 987655);
+  expect(original).toBeTruthy();
+  expect(revision).toBeTruthy();
+  expect(data.bomItems.find(row => row.bomVersionId === original.id).quantityPerUnit).toBe(1);
+  expect(data.bomItems.find(row => row.bomVersionId === revision.id).quantityPerUnit).toBe(2);
+  expect(data.workOrders.find(row => row.orderNo === 'BROWSER-PLANNING-1').bomVersionId).toBe(original.id);
 });
