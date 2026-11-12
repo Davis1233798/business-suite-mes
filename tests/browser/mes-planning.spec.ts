@@ -37,5 +37,8 @@ test('MES back office creates a BOM and releases a work order with it', async ({
     'Work order released; stage its materials before starting.',
   );
   await page.getByLabel('Search data').fill('BROWSER-PLANNING-1');
-  await expect(page.getByRole('cell', { name: 'BROWSER-PLANNING-1', exact: true })).toBeVisible();
+  const workOrders = page.locator('section.dataset').filter({
+    has: page.getByRole('heading', { name: /^Work orders/ }),
+  });
+  await expect(workOrders.getByRole('cell', { name: 'BROWSER-PLANNING-1', exact: true })).toBeVisible();
 });
