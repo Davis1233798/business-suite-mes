@@ -51,12 +51,16 @@ test('MES back office creates a BOM and releases a work order with it', async ({
   await page.reload();
   const response = await page.request.get('/api/stations/mes/data?view=back');
   expect(response.ok()).toBeTruthy();
-  const {data} = await response.json();
+  const {data}: {data: {
+    bomVersions: {id: string; productId: string; version: number}[];
+    bomItems: {bomVersionId: string; quantityPerUnit: number}[];
+    workOrders: {orderNo: string; bomVersionId: string}[];
+  }} = await response.json();
   const original = data.bomVersions.find(row => row.productId === productId && row.version === 987654);
   const revision = data.bomVersions.find(row => row.productId === productId && row.version === 987655);
   expect(original).toBeTruthy();
   expect(revision).toBeTruthy();
-  expect(data.bomItems.find(row => row.bomVersionId === original.id).quantityPerUnit).toBe(1);
-  expect(data.bomItems.find(row => row.bomVersionId === revision.id).quantityPerUnit).toBe(2);
-  expect(data.workOrders.find(row => row.orderNo === 'BROWSER-PLANNING-1').bomVersionId).toBe(original.id);
+  expect(data.bomItems.find(row => row.bomVersionId === original?.id)?.quantityPerUnit).toBe(1);
+  expect(data.bomItems.find(row => row.bomVersionId === revision?.id)?.quantityPerUnit).toBe(2);
+  expect(data.workOrders.find(row => row.orderNo === 'BROWSER-PLANNING-1')?.bomVersionId).toBe(original?.id);
 });
