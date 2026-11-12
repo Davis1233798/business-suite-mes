@@ -74,6 +74,16 @@ func (a *App) stationAPI(w http.ResponseWriter, r *http.Request) {
 		fail(w, 403, "No access to this workspace")
 		return
 	}
+	if site == "mes" {
+		switch action {
+		case "work-orders":
+			a.mesWorkOrder(w, r, id, g)
+			return
+		case "bom":
+			a.mesBOM(w, r, id, g)
+			return
+		}
+	}
 	if action == "business" && site == "mes" {
 		a.mesBusiness(w, r, id, g)
 		return
@@ -214,7 +224,7 @@ type PrintKind struct{ Site, Dataset, Title, Lines, ForeignKey string }
 
 var printKinds = map[string]PrintKind{
 	"mes-finished-goods-label": {"mes", "finishedGoodsBatches", "Finished goods label", "", ""},
-	"mes-lot-label": {"mes", "lots", "Material label", "", ""}, "mes-order-label": {"mes", "workOrders", "Work order label", "", ""}, "mes-order": {"mes", "workOrders", "Work orders", "mes_work_order_materials", "work_order_id"}, "mes-report": {"mes", "reports", "Production report", "", ""},
+	"mes-lot-label":            {"mes", "lots", "Material label", "", ""}, "mes-order-label": {"mes", "workOrders", "Work order label", "", ""}, "mes-order": {"mes", "workOrders", "Work orders", "mes_work_order_materials", "work_order_id"}, "mes-report": {"mes", "reports", "Production report", "", ""},
 }
 
 func (a *App) printData(w http.ResponseWriter, r *http.Request, id *Identity, site string) {
