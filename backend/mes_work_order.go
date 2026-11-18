@@ -9,13 +9,16 @@ import (
 )
 
 type mesWorkOrderRequest struct {
-	ProductID     string `json:"productId"`
-	BOMID         string `json:"bomId"`
-	CenterID      string `json:"centerId"`
-	OrderNumber   string `json:"orderNumber"`
-	Target        int64  `json:"target"`
-	OperationName string `json:"operationName"`
-	Minutes       int64  `json:"minutes"`
+	Action        string `json:"action,omitempty"`
+	WorkOrderID   string `json:"workOrderId,omitempty"`
+	Sequence      int    `json:"sequence,omitempty"`
+	ProductID     string `json:"productId,omitempty"`
+	BOMID         string `json:"bomId,omitempty"`
+	CenterID      string `json:"centerId,omitempty"`
+	OrderNumber   string `json:"orderNumber,omitempty"`
+	Target        int64  `json:"target,omitempty"`
+	OperationName string `json:"operationName,omitempty"`
+	Minutes       int64  `json:"minutes,omitempty"`
 	Key           string `json:"idempotencyKey"`
 }
 
@@ -29,7 +32,118 @@ func (a *App) mesWorkOrder(w http.ResponseWriter, r *http.Request, id *Identity,
 		return
 	}
 	var in mesWorkOrderRequest
-	if body(r, &in) != nil || len(in.Key) < 8 || len(in.Key) > 128 || in.ProductID == "" || len(in.ProductID) > 256 || in.BOMID == "" || len(in.BOMID) > 256 || in.CenterID == "" || len(in.CenterID) > 256 {
+	if body(r, &in) != nil || len(in.Key) < 8 || len(in.Key) > 128 {
+		fail(w, 400, "Invalid work order request")
+		return
+	}
+
+	if in.Action == "addOperation" {
+		if in.WorkOrderID == "" || len(in.WorkOrderID) > 256 || in.CenterID == "" || len(in.CenterID) > 256 {
+			fail(w, 400, "Enter valid operation parameters")
+			return
+		}
+		in.OperationName = strings.TrimSpace(in.OperationName)
+		if in.OperationName == "" || len(in.OperationName) > 200 || in.Sequence <= 0 || in.Sequence > 100000 || in.Minutes < 1 || in.Minutes > 1000000 {
+			fail(w, 400, "Enter valid operation details")
+			return
+		}
+		tx, e := a.db.BeginTx(r.Context(), nil)
+		if e != nil {
+			fail(w, 503, "MES unavailable")
+			return
+		}
+		defer tx.Rollback()
+		raw, _ := json.Marshal(in)
+		hash := digest(id.UserID + "\x00" + string(raw))
+		const endpoint = "/station/mes/work-order/operation/create"
+		var oldHash, oldBody string
+		e = tx.QueryRow("SELECT request_hash,response_body FROM idempotency_keys WHERE organization_id=? AND key=? AND endpoint=?", id.OrganizationID, in.Key, endpoint).Scan(&oldHash, &oldBody)
+		if e == nil {
+			if hash != oldHash {
+				fail(w, 409, "Retry key already used")
+				return
+			}
+			var result map[string]any
+			if json.Unmarshal([]byte(oldBody), &result) != nil {
+				fail(w, 500, "Invalid retry result")
+				return
+			}
+			ok(w, result)
+			return
+		}
+		if !errors.Is(e, sql.ErrNoRows) {
+			fail(w, 503, "Cannot read retry state")
+			return
+		}
+
+		var woStatus string
+		e = tx.QueryRow("SELECT status FROM mes_work_orders WHERE organization_id=? AND id=?", id.OrganizationID, in.WorkOrderID).Scan(&woStatus)
+		if errors.Is(e, sql.ErrNoRows) {
+			fail(w, 404, "Work order not found")
+			return
+		}
+		if e != nil {
+			fail(w, 503, "Cannot read work order")
+			return
+		}
+		if woStatus == "closed" {
+			fail(w, 409, "Work order is closed")
+			return
+		}
+
+		var centerCount int
+		e = tx.QueryRow("SELECT count(*) FROM mes_work_centers WHERE organization_id=? AND id=? AND status='active'", id.OrganizationID, in.CenterID).Scan(&centerCount)
+		if e != nil {
+			fail(w, 503, "Cannot validate work center")
+			return
+		}
+		if centerCount != 1 {
+			fail(w, 404, "Active work center not found")
+			return
+		}
+
+		var seqCount int
+		e = tx.QueryRow("SELECT count(*) FROM mes_operations WHERE organization_id=? AND work_order_id=? AND sequence=?", id.OrganizationID, in.WorkOrderID, in.Sequence).Scan(&seqCount)
+		if e != nil {
+			fail(w, 503, "Cannot validate sequence")
+			return
+		}
+		if seqCount > 0 {
+			fail(w, 409, "Operation sequence already exists for this work order")
+			return
+		}
+
+		opID := "operation_" + token()
+		_, e = tx.Exec("INSERT INTO mes_operations(id,organization_id,work_order_id,sequence,work_center_id,name,standard_minutes_per_unit,status) VALUES(?,?,?,?,?,?,?,'pending')", opID, id.OrganizationID, in.WorkOrderID, in.Sequence, in.CenterID, in.OperationName, in.Minutes)
+		if e != nil {
+			fail(w, 503, "Cannot save operation")
+			return
+		}
+
+		result := map[string]any{
+			"workOrderId": in.WorkOrderID,
+			"operationId": opID,
+			"sequence":    in.Sequence,
+			"status":      "pending",
+		}
+		encoded, _ := json.Marshal(result)
+		if _, e = tx.Exec("INSERT INTO idempotency_keys(id,organization_id,key,endpoint,request_hash,response_status,response_body) VALUES(?,?,?,?,?,200,?)", "idem_"+token(), id.OrganizationID, in.Key, endpoint, hash, string(encoded)); e != nil {
+			fail(w, 503, "Cannot save retry state")
+			return
+		}
+		if _, e = tx.Exec("INSERT INTO audit_events(id,organization_id,actor_id,actor_role,action,entity_type,entity_id,after_value) VALUES(?,?,?,?,'mes.operation.create','mes_operation',?,?)", "audit_"+token(), id.OrganizationID, id.UserID, g.Role, opID, string(encoded)); e != nil {
+			fail(w, 503, "Cannot record audit event")
+			return
+		}
+		if tx.Commit() != nil {
+			fail(w, 503, "Cannot commit operation")
+			return
+		}
+		ok(w, result)
+		return
+	}
+
+	if in.ProductID == "" || len(in.ProductID) > 256 || in.BOMID == "" || len(in.BOMID) > 256 || in.CenterID == "" || len(in.CenterID) > 256 {
 		fail(w, 400, "Select product, BOM and work center")
 		return
 	}

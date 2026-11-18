@@ -82,6 +82,9 @@ func (a *App) stationAPI(w http.ResponseWriter, r *http.Request) {
 		case "bom":
 			a.mesBOM(w, r, id, g)
 			return
+		case "oee":
+			a.mesOEE(w, r, id, g)
+			return
 		}
 	}
 	if action == "business" && site == "mes" {
