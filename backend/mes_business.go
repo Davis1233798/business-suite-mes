@@ -115,27 +115,113 @@ func (a *App) mesBusiness(w http.ResponseWriter, r *http.Request, id *Identity, 
 		}
 		result["status"] = "in_progress"
 	} else {
-		var operations int
-		err = tx.QueryRowContext(r.Context(), "SELECT count(*) FROM mes_operations WHERE organization_id=? AND work_order_id=? AND id=?", id.OrganizationID, in.WorkOrderID, in.OperationID).Scan(&operations)
+		var currentSeq int
+		var currentOpStatus string
+		err = tx.QueryRowContext(r.Context(), "SELECT sequence, status FROM mes_operations WHERE organization_id=? AND work_order_id=? AND id=?", id.OrganizationID, in.WorkOrderID, in.OperationID).Scan(&currentSeq, &currentOpStatus)
+		if errors.Is(err, sql.ErrNoRows) {
+			fail(w, http.StatusNotFound, "Operation not found for this work order")
+			return
+		}
 		if err != nil {
 			fail(w, http.StatusServiceUnavailable, "Cannot validate operation")
 			return
 		}
-		if operations != 1 {
-			fail(w, http.StatusNotFound, "Operation not found for this work order")
+		if status != "in_progress" {
+			fail(w, http.StatusConflict, "Work order is not in progress")
 			return
 		}
-		if status != "in_progress" || good+scrap+in.Good+in.Scrap > target {
-			fail(w, http.StatusConflict, "Work order is not in progress or report exceeds its target")
+
+		var thisReportedGood, thisReportedScrap int
+		err = tx.QueryRowContext(r.Context(), "SELECT COALESCE(SUM(good_quantity),0), COALESCE(SUM(scrap_quantity),0) FROM mes_production_reports WHERE organization_id=? AND work_order_id=? AND operation_id=?", id.OrganizationID, in.WorkOrderID, in.OperationID).Scan(&thisReportedGood, &thisReportedScrap)
+		if err != nil {
+			fail(w, http.StatusServiceUnavailable, "Cannot read operation reports")
 			return
 		}
-		nextStatus := "in_progress"
-		if good+scrap+in.Good+in.Scrap == target {
-			nextStatus = "completed"
+		thisTotalReported := thisReportedGood + thisReportedScrap
+		newTotalReported := thisTotalReported + in.Good + in.Scrap
+
+		var prevOpID, prevOpStatus string
+		var prevSeq int
+		hasPrev := true
+		err = tx.QueryRowContext(r.Context(), "SELECT id, sequence, status FROM mes_operations WHERE organization_id=? AND work_order_id=? AND sequence < ? ORDER BY sequence DESC LIMIT 1", id.OrganizationID, in.WorkOrderID, currentSeq).Scan(&prevOpID, &prevSeq, &prevOpStatus)
+		if errors.Is(err, sql.ErrNoRows) {
+			hasPrev = false
+		} else if err != nil {
+			fail(w, http.StatusServiceUnavailable, "Cannot check preceding operation")
+			return
 		}
-		res, e := tx.ExecContext(r.Context(), "UPDATE mes_work_orders SET completed_quantity=completed_quantity+?,scrapped_quantity=scrapped_quantity+?,status=? WHERE organization_id=? AND id=? AND status='in_progress' AND completed_quantity+scrapped_quantity+?<=target_quantity", in.Good, in.Scrap, nextStatus, id.OrganizationID, in.WorkOrderID, in.Good+in.Scrap)
+
+		var prevGood int
+		if hasPrev {
+			err = tx.QueryRowContext(r.Context(), "SELECT COALESCE(SUM(good_quantity),0) FROM mes_production_reports WHERE organization_id=? AND work_order_id=? AND operation_id=?", id.OrganizationID, in.WorkOrderID, prevOpID).Scan(&prevGood)
+			if err != nil {
+				fail(w, http.StatusServiceUnavailable, "Cannot read preceding operation output")
+				return
+			}
+			if newTotalReported > prevGood {
+				fail(w, http.StatusConflict, "Report quantity exceeds preceding operation completed good output")
+				return
+			}
+		} else {
+			if newTotalReported > target {
+				fail(w, http.StatusConflict, "Work order is not in progress or report exceeds its target")
+				return
+			}
+		}
+
+		opNextStatus := "in_progress"
+		if !hasPrev {
+			if newTotalReported >= target {
+				opNextStatus = "completed"
+			}
+		} else {
+			if prevOpStatus == "completed" && newTotalReported >= prevGood {
+				opNextStatus = "completed"
+			}
+		}
+
+		_, err = tx.ExecContext(r.Context(), "UPDATE mes_operations SET status=? WHERE organization_id=? AND id=?", opNextStatus, id.OrganizationID, in.OperationID)
+		if err != nil {
+			fail(w, http.StatusServiceUnavailable, "Cannot update operation status")
+			return
+		}
+
+		reportID := "report_" + token()
+		_, err = tx.ExecContext(r.Context(), "INSERT INTO mes_production_reports(id,organization_id,work_order_id,operation_id,operator_id,good_quantity,scrap_quantity,notes,idempotency_key) VALUES(?,?,?,?,?,?,?,?,?)", reportID, id.OrganizationID, in.WorkOrderID, in.OperationID, id.UserID, in.Good, in.Scrap, strings.TrimSpace(in.Notes), in.IdempotencyKey)
+		if err != nil {
+			fail(w, http.StatusServiceUnavailable, "Unable to save production report")
+			return
+		}
+
+		var totalWoScrap int
+		err = tx.QueryRowContext(r.Context(), "SELECT COALESCE(SUM(scrap_quantity), 0) FROM mes_production_reports WHERE organization_id=? AND work_order_id=?", id.OrganizationID, in.WorkOrderID).Scan(&totalWoScrap)
+		if err != nil {
+			fail(w, http.StatusServiceUnavailable, "Unable to compute work order scrap")
+			return
+		}
+
+		var maxReportedSeq int
+		err = tx.QueryRowContext(r.Context(), "SELECT COALESCE(MAX(o.sequence), 0) FROM mes_operations o JOIN mes_production_reports r ON r.organization_id=o.organization_id AND r.work_order_id=o.work_order_id AND r.operation_id=o.id WHERE o.organization_id=? AND o.work_order_id=?", id.OrganizationID, in.WorkOrderID).Scan(&maxReportedSeq)
+		if err != nil {
+			fail(w, http.StatusServiceUnavailable, "Unable to find terminal reported operation")
+			return
+		}
+
+		var totalWoCompleted int
+		err = tx.QueryRowContext(r.Context(), "SELECT COALESCE(SUM(r.good_quantity), 0) FROM mes_production_reports r JOIN mes_operations o ON o.organization_id=r.organization_id AND o.id=r.operation_id WHERE o.organization_id=? AND o.work_order_id=? AND o.sequence=?", id.OrganizationID, in.WorkOrderID, maxReportedSeq).Scan(&totalWoCompleted)
+		if err != nil {
+			fail(w, http.StatusServiceUnavailable, "Unable to compute work order completed quantity")
+			return
+		}
+
+		woNextStatus := "in_progress"
+		if totalWoCompleted+totalWoScrap >= target {
+			woNextStatus = "completed"
+		}
+
+		res, e := tx.ExecContext(r.Context(), "UPDATE mes_work_orders SET completed_quantity=?,scrapped_quantity=?,status=? WHERE organization_id=? AND id=? AND status='in_progress'", totalWoCompleted, totalWoScrap, woNextStatus, id.OrganizationID, in.WorkOrderID)
 		if e != nil {
-			fail(w, http.StatusServiceUnavailable, "Unable to commit production report")
+			fail(w, http.StatusServiceUnavailable, "Unable to update work order")
 			return
 		}
 		n, e := res.RowsAffected()
@@ -143,13 +229,8 @@ func (a *App) mesBusiness(w http.ResponseWriter, r *http.Request, id *Identity, 
 			fail(w, http.StatusConflict, "Work order changed; refresh and retry")
 			return
 		}
-		reportID := "report_" + token()
-		_, err = tx.ExecContext(r.Context(), "INSERT INTO mes_production_reports(id,organization_id,work_order_id,operation_id,operator_id,good_quantity,scrap_quantity,notes,idempotency_key) VALUES(?,?,?,?,?,?,?,?,?)", reportID, id.OrganizationID, in.WorkOrderID, in.OperationID, id.UserID, in.Good, in.Scrap, strings.TrimSpace(in.Notes), in.IdempotencyKey)
-		if err != nil {
-			fail(w, http.StatusServiceUnavailable, "Unable to save production report")
-			return
-		}
-		result["reportId"], result["goodQuantity"], result["scrapQuantity"], result["totalCompleted"], result["totalScrapped"], result["status"] = reportID, in.Good, in.Scrap, good+in.Good, scrap+in.Scrap, nextStatus
+
+		result["reportId"], result["goodQuantity"], result["scrapQuantity"], result["totalCompleted"], result["totalScrapped"], result["status"], result["operationStatus"] = reportID, in.Good, in.Scrap, totalWoCompleted, totalWoScrap, woNextStatus, opNextStatus
 		encoded, _ := json.Marshal(result)
 		_, err = tx.ExecContext(r.Context(), "INSERT INTO idempotency_keys(id,organization_id,key,endpoint,request_hash,response_status,response_body) VALUES(?,?,?,?,?,200,?)", "idem_"+token(), id.OrganizationID, in.IdempotencyKey, endpoint, fingerprint, string(encoded))
 		if err != nil {
